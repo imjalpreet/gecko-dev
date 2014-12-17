@@ -232,10 +232,6 @@ JS_CopyPropertyFrom(JSContext *cx, JS::HandleId id, JS::HandleObject target,
 extern JS_FRIEND_API(bool)
 JS_WrapPropertyDescriptor(JSContext *cx, JS::MutableHandle<JSPropertyDescriptor> desc);
 
-extern JS_FRIEND_API(bool)
-JS_EnumerateState(JSContext *cx, JS::HandleObject obj, JSIterateOp enum_op,
-                  JS::MutableHandleValue statep, JS::MutableHandleId idp);
-
 struct JSFunctionSpecWithHelp {
     const char      *name;
     JSNative        call;
@@ -278,17 +274,17 @@ namespace js {
             JSCLASS_IS_PROXY |                                                          \
             JSCLASS_IMPLEMENTS_BARRIERS |                                               \
             flags,                                                                      \
-        JS_PropertyStub,         /* addProperty */                                      \
-        JS_DeletePropertyStub,   /* delProperty */                                      \
-        JS_PropertyStub,         /* getProperty */                                      \
-        JS_StrictPropertyStub,   /* setProperty */                                      \
-        JS_EnumerateStub,                                                               \
-        JS_ResolveStub,                                                                 \
+        nullptr,                 /* addProperty */                                      \
+        nullptr,                 /* delProperty */                                      \
+        nullptr,                 /* getProperty */                                      \
+        nullptr,                 /* setProperty */                                      \
+        nullptr,                 /* enumerate */                                        \
+        nullptr,                 /* resolve */                                          \
         js::proxy_Convert,                                                              \
         js::proxy_Finalize,      /* finalize    */                                      \
-        nullptr,                  /* call        */                                     \
+        nullptr,                 /* call        */                                      \
         js::proxy_HasInstance,   /* hasInstance */                                      \
-        nullptr,             /* construct   */                                          \
+        nullptr,                 /* construct   */                                      \
         js::proxy_Trace,         /* trace       */                                      \
         JS_NULL_CLASS_SPEC,                                                             \
         ext,                                                                            \
@@ -493,9 +489,7 @@ struct WeakMapTracer;
  * m will be nullptr if the weak map is not contained in a JS Object.
  */
 typedef void
-(* WeakMapTraceCallback)(WeakMapTracer *trc, JSObject *m,
-                         void *k, JSGCTraceKind kkind,
-                         void *v, JSGCTraceKind vkind);
+(* WeakMapTraceCallback)(WeakMapTracer *trc, JSObject *m, JS::GCCellPtr key, JS::GCCellPtr value);
 
 struct WeakMapTracer {
     JSRuntime            *runtime;
@@ -515,7 +509,7 @@ extern JS_FRIEND_API(bool)
 ZoneGlobalsAreAllGray(JS::Zone *zone);
 
 typedef void
-(*GCThingCallback)(void *closure, void *gcthing);
+(*GCThingCallback)(void *closure, JS::GCCellPtr thing);
 
 extern JS_FRIEND_API(void)
 VisitGrayWrapperTargets(JS::Zone *zone, GCThingCallback callback, void *closure);
@@ -2686,7 +2680,6 @@ js_DefineOwnProperty(JSContext *cx, JSObject *objArg, jsid idArg,
 extern JS_FRIEND_API(bool)
 js_ReportIsNotFunction(JSContext *cx, JS::HandleValue v);
 
-#ifdef JSGC_GENERATIONAL
 extern JS_FRIEND_API(void)
 JS_StoreObjectPostBarrierCallback(JSContext* cx,
                                   void (*callback)(JSTracer *trc, JSObject *key, void *data),
@@ -2696,16 +2689,5 @@ extern JS_FRIEND_API(void)
 JS_StoreStringPostBarrierCallback(JSContext* cx,
                                   void (*callback)(JSTracer *trc, JSString *key, void *data),
                                   JSString *key, void *data);
-#else
-inline void
-JS_StoreObjectPostBarrierCallback(JSContext* cx,
-                                  void (*callback)(JSTracer *trc, JSObject *key, void *data),
-                                  JSObject *key, void *data) {}
-
-inline void
-JS_StoreStringPostBarrierCallback(JSContext* cx,
-                                  void (*callback)(JSTracer *trc, JSString *key, void *data),
-                                  JSString *key, void *data) {}
-#endif /* JSGC_GENERATIONAL */
 
 #endif /* jsfriendapi_h */

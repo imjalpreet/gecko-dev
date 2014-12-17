@@ -191,6 +191,9 @@ public:
                                      const int32_t& aCause,
                                      const int32_t& aFocusChange) MOZ_OVERRIDE;
     virtual bool RecvRequestFocus(const bool& aCanRaise) MOZ_OVERRIDE;
+    virtual bool RecvEnableDisableCommands(const nsString& aAction,
+                                           const nsTArray<nsCString>& aEnabledCommands,
+                                           const nsTArray<nsCString>& aDisabledCommands) MOZ_OVERRIDE;
     virtual bool RecvSetCursor(const uint32_t& aValue, const bool& aForce) MOZ_OVERRIDE;
     virtual bool RecvSetBackgroundColor(const nscolor& aValue) MOZ_OVERRIDE;
     virtual bool RecvSetStatus(const uint32_t& aType, const nsString& aStatus) MOZ_OVERRIDE;
@@ -207,9 +210,9 @@ public:
                                            const ViewID& aViewId,
                                            const bool& aIsRoot,
                                            const ZoomConstraints& aConstraints) MOZ_OVERRIDE;
-    virtual bool RecvContentReceivedTouch(const ScrollableLayerGuid& aGuid,
-                                          const uint64_t& aInputBlockId,
-                                          const bool& aPreventDefault) MOZ_OVERRIDE;
+    virtual bool RecvContentReceivedInputBlock(const ScrollableLayerGuid& aGuid,
+                                               const uint64_t& aInputBlockId,
+                                               const bool& aPreventDefault) MOZ_OVERRIDE;
     virtual bool RecvSetTargetAPZC(const uint64_t& aInputBlockId,
                                    const nsTArray<ScrollableLayerGuid>& aTargets) MOZ_OVERRIDE;
 
@@ -222,7 +225,8 @@ public:
     // message-sending functions under a layer of indirection and
     // eating the return values
     void Show(const nsIntSize& size);
-    void UpdateDimensions(const nsIntRect& rect, const nsIntSize& size);
+    void UpdateDimensions(const nsIntRect& rect, const nsIntSize& size,
+                          const nsIntPoint& chromeDisp);
     void UpdateFrame(const layers::FrameMetrics& aFrameMetrics);
     void UIResolutionChanged();
     void AcknowledgeScrollUpdate(const ViewID& aScrollId, const uint32_t& aScrollGeneration);

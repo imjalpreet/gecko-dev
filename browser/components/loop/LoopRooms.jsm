@@ -34,6 +34,8 @@ const roomsPushNotification = function(version, channelID) {
 // of date. The Push server may notify us of this event, which will set the global
 // 'dirty' flag to TRUE.
 let gDirty = true;
+// Global variable that keeps track of the currently used account.
+let gCurrentUser = null;
 
 /**
  * Extend a `target` object with the properties defined in `source`.
@@ -135,7 +137,7 @@ let LoopRoomsInternal = {
   get participantsCount() {
     let count = 0;
     for (let room of this.rooms.values()) {
-      if (!("participants" in room)) {
+      if (room.deleted || !("participants" in room)) {
         continue;
       }
       count += room.participants.length;
@@ -346,6 +348,7 @@ let LoopRoomsInternal = {
       .then(response => {
         this.rooms.delete(roomToken);
         eventEmitter.emit("delete", room);
+        eventEmitter.emit("delete:" + room.roomToken, room);
         callback(null, room);
       }, error => callback(error)).catch(error => callback(error));
   },
@@ -468,9 +471,36 @@ let LoopRoomsInternal = {
    * @param {String} channelID Notification channel identifier.
    */
   onNotification: function(version, channelID) {
+    // See if we received a notification for the channel that's currently active:
+    let channelIDs = MozLoopService.channelIDs;
+    if ((this.sessionType == LOOP_SESSION_TYPE.GUEST && channelID != channelIDs.roomsGuest) ||
+        (this.sessionType == LOOP_SESSION_TYPE.FXA   && channelID != channelIDs.roomsFxA)) {
+      return;
+    }
+
     gDirty = true;
     this.getAll(version, () => {});
   },
+
+  /**
+   * When a user logs in or out, this method should be invoked to check whether
+   * the rooms cache needs to be refreshed.
+   *
+   * @param {String|null} user The FxA userID or NULL
+   */
+  maybeRefresh: function(user = null) {
+    if (gCurrentUser == user) {
+      return;
+    }
+
+    gCurrentUser = user;
+    if (!gDirty) {
+      gDirty = true;
+      this.rooms.clear();
+      eventEmitter.emit("refresh");
+      this.getAll(null, () => {});
+    }
+  }
 };
 Object.freeze(LoopRoomsInternal);
 
@@ -534,6 +564,10 @@ this.LoopRooms = {
 
   getGuestCreatedRoom: function() {
     return LoopRoomsInternal.getGuestCreatedRoom();
+  },
+
+  maybeRefresh: function(user) {
+    return LoopRoomsInternal.maybeRefresh(user);
   },
 
   promise: function(method, ...params) {

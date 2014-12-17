@@ -19,9 +19,7 @@
 #include "asmjs/AsmJSModule.h"
 #include "builtin/Eval.h"
 #include "builtin/TypedObject.h"
-#ifdef JSGC_GENERATIONAL
-# include "gc/Nursery.h"
-#endif
+#include "gc/Nursery.h"
 #include "irregexp/NativeRegExpMacroAssembler.h"
 #include "jit/BaselineCompiler.h"
 #include "jit/IonBuilder.h"
@@ -2541,7 +2539,6 @@ CodeGenerator::visitMonitorTypes(LMonitorTypes *lir)
     bailoutFrom(&miss, lir->snapshot());
 }
 
-#ifdef JSGC_GENERATIONAL
 // Out-of-line path to update the store buffer.
 class OutOfLineCallPostWriteBarrier : public OutOfLineCodeBase<CodeGenerator>
 {
@@ -2599,12 +2596,10 @@ CodeGenerator::visitOutOfLineCallPostWriteBarrier(OutOfLineCallPostWriteBarrier 
 
     masm.jump(ool->rejoin());
 }
-#endif
 
 void
 CodeGenerator::visitPostWriteBarrierO(LPostWriteBarrierO *lir)
 {
-#ifdef JSGC_GENERATIONAL
     OutOfLineCallPostWriteBarrier *ool = new(alloc()) OutOfLineCallPostWriteBarrier(lir, lir->object());
     addOutOfLineCode(ool, lir->mir());
 
@@ -2622,13 +2617,11 @@ CodeGenerator::visitPostWriteBarrierO(LPostWriteBarrierO *lir)
     masm.branchPtrInNurseryRange(Assembler::Equal, ToRegister(lir->value()), temp, ool->entry());
 
     masm.bind(ool->rejoin());
-#endif
 }
 
 void
 CodeGenerator::visitPostWriteBarrierV(LPostWriteBarrierV *lir)
 {
-#ifdef JSGC_GENERATIONAL
     OutOfLineCallPostWriteBarrier *ool = new(alloc()) OutOfLineCallPostWriteBarrier(lir, lir->object());
     addOutOfLineCode(ool, lir->mir());
 
@@ -2647,7 +2640,6 @@ CodeGenerator::visitPostWriteBarrierV(LPostWriteBarrierV *lir)
     masm.branchValueIsNurseryObject(Assembler::Equal, value, temp, ool->entry());
 
     masm.bind(ool->rejoin());
-#endif
 }
 
 void
@@ -4197,10 +4189,10 @@ class OutOfLineNewObject : public OutOfLineCodeBase<CodeGenerator>
     }
 };
 
-typedef JSObject *(*NewInitObjectFn)(JSContext *, HandleNativeObject);
+typedef JSObject *(*NewInitObjectFn)(JSContext *, HandlePlainObject);
 static const VMFunction NewInitObjectInfo = FunctionInfo<NewInitObjectFn>(NewInitObject);
 
-typedef JSObject *(*NewInitObjectWithClassPrototypeFn)(JSContext *, HandleObject);
+typedef JSObject *(*NewInitObjectWithClassPrototypeFn)(JSContext *, HandlePlainObject);
 static const VMFunction NewInitObjectWithClassPrototypeInfo =
     FunctionInfo<NewInitObjectWithClassPrototypeFn>(NewInitObjectWithClassPrototype);
 
@@ -4321,7 +4313,7 @@ CodeGenerator::visitNewObject(LNewObject *lir)
     MOZ_ASSERT(gen->info().executionMode() == SequentialExecution);
     Register objReg = ToRegister(lir->output());
     Register tempReg = ToRegister(lir->temp());
-    NativeObject *templateObject = lir->mir()->templateObject();
+    PlainObject *templateObject = lir->mir()->templateObject();
 
     if (lir->mir()->shouldUseVM()) {
         visitNewObjectVMCall(lir);
@@ -4375,7 +4367,7 @@ CodeGenerator::visitNewDeclEnvObject(LNewDeclEnvObject *lir)
 {
     Register objReg = ToRegister(lir->output());
     Register tempReg = ToRegister(lir->temp());
-    NativeObject *templateObj = lir->mir()->templateObj();
+    DeclEnvObject *templateObj = lir->mir()->templateObj();
     CompileInfo &info = lir->mir()->block()->info();
 
     // If we have a template object, we can inline call object creation.
@@ -4401,7 +4393,7 @@ CodeGenerator::visitNewCallObject(LNewCallObject *lir)
     Register objReg = ToRegister(lir->output());
     Register tempReg = ToRegister(lir->temp());
 
-    NativeObject *templateObj = lir->mir()->templateObject();
+    CallObject *templateObj = lir->mir()->templateObject();
 
     JSScript *script = lir->mir()->block()->info().script();
     uint32_t lexicalBegin = script->bindings.aliasedBodyLevelLexicalBegin();
@@ -4452,7 +4444,7 @@ CodeGenerator::visitNewCallObjectPar(LNewCallObjectPar *lir)
     Register cxReg = ToRegister(lir->forkJoinContext());
     Register tempReg1 = ToRegister(lir->getTemp0());
     Register tempReg2 = ToRegister(lir->getTemp1());
-    NativeObject *templateObj = lir->mir()->templateObj();
+    CallObject *templateObj = lir->mir()->templateObj();
 
     emitAllocateGCThingPar(lir, resultReg, cxReg, tempReg1, tempReg2, templateObj);
 }
@@ -4624,7 +4616,7 @@ CodeGenerator::visitInitElemGetterSetter(LInitElemGetterSetter *lir)
     callVM(InitElemGetterSetterInfo, lir);
 }
 
-typedef bool(*MutatePrototypeFn)(JSContext *cx, HandleObject obj, HandleValue value);
+typedef bool(*MutatePrototypeFn)(JSContext *cx, HandlePlainObject obj, HandleValue value);
 static const VMFunction MutatePrototypeInfo =
     FunctionInfo<MutatePrototypeFn>(MutatePrototype);
 
@@ -4728,7 +4720,7 @@ static const VMFunction NewGCObjectInfo =
 void
 CodeGenerator::visitCreateThisWithTemplate(LCreateThisWithTemplate *lir)
 {
-    NativeObject *templateObject = lir->mir()->templateObject();
+    PlainObject *templateObject = lir->mir()->templateObject();
     gc::AllocKind allocKind = templateObject->asTenured().getAllocKind();
     gc::InitialHeap initialHeap = lir->mir()->initialHeap();
     Register objReg = ToRegister(lir->output());
@@ -4892,19 +4884,13 @@ CodeGenerator::visitTypedArrayElements(LTypedArrayElements *lir)
 }
 
 void
-CodeGenerator::visitTypedObjectProto(LTypedObjectProto *lir)
+CodeGenerator::visitTypedObjectDescr(LTypedObjectDescr *lir)
 {
     Register obj = ToRegister(lir->object());
-    MOZ_ASSERT(ToRegister(lir->output()) == ReturnReg);
+    Register out = ToRegister(lir->output());
 
-    // Eventually we ought to inline this helper function for
-    // efficiency, but it's mildly non-trivial since we must reach
-    // into the type object and so on.
-
-    const Register tempReg = ToRegister(lir->temp());
-    masm.setupUnalignedABICall(1, tempReg);
-    masm.passABIArg(obj);
-    masm.callWithABI(JS_FUNC_TO_DATA_PTR(void *, TypedObjectProto));
+    masm.loadPtr(Address(obj, JSObject::offsetOfType()), out);
+    masm.loadPtr(Address(out, types::TypeObject::offsetOfAddendum()), out);
 }
 
 void
@@ -6961,21 +6947,11 @@ CodeGenerator::visitIteratorStart(LIteratorStart *lir)
     // Write barrier for stores to the iterator. We only need to take a write
     // barrier if NativeIterator::obj is actually going to change.
     {
-#ifdef JSGC_GENERATIONAL
-        // Bug 867815: When using a nursery, we unconditionally take this out-
-        // of-line so that we do not have to post-barrier the store to
-        // NativeIter::obj. This just needs JIT support for the Cell* buffer.
+        // Bug 867815: Unconditionally take this out- of-line so that we do not
+        // have to post-barrier the store to NativeIter::obj. This just needs
+        // JIT support for the Cell* buffer.
         Address objAddr(niTemp, offsetof(NativeIterator, obj));
         masm.branchPtr(Assembler::NotEqual, objAddr, obj, ool->entry());
-#else
-        Label noBarrier;
-        masm.branchTestNeedsIncrementalBarrier(Assembler::Zero, &noBarrier);
-
-        Address objAddr(niTemp, offsetof(NativeIterator, obj));
-        masm.branchPtr(Assembler::NotEqual, objAddr, obj, ool->entry());
-
-        masm.bind(&noBarrier);
-#endif // !JSGC_GENERATIONAL
     }
 
     // Mark iterator as active.
@@ -7785,7 +7761,7 @@ static const VMFunctionsModal SetObjectElementInfo = VMFunctionsModal(
 void
 CodeGenerator::visitCallSetElement(LCallSetElement *lir)
 {
-    pushArg(Imm32(current->mir()->strict()));
+    pushArg(Imm32(lir->mir()->strict()));
     pushArg(ToValue(lir, LCallSetElement::Value));
     pushArg(ToValue(lir, LCallSetElement::Index));
     pushArg(ToRegister(lir->getOperand(0)));
@@ -9790,11 +9766,9 @@ CodeGenerator::visitInterruptCheck(LInterruptCheck *lir)
 void
 CodeGenerator::visitAsmJSInterruptCheck(LAsmJSInterruptCheck *lir)
 {
-    Register scratch = ToRegister(lir->scratch());
-    masm.movePtr(AsmJSImmPtr(AsmJSImm_RuntimeInterruptUint32), scratch);
-    masm.load32(Address(scratch, 0), scratch);
     Label rejoin;
-    masm.branch32(Assembler::Equal, scratch, Imm32(0), &rejoin);
+    masm.branch32(Assembler::Equal, AsmJSAbsoluteAddress(AsmJSImm_RuntimeInterruptUint32),
+                  Imm32(0), &rejoin);
     {
         uint32_t stackFixup = ComputeByteAlignment(masm.framePushed() + sizeof(AsmJSFrame),
                                                    ABIStackAlignment);

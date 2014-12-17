@@ -471,7 +471,8 @@ class Marionette(object):
                  emulator_binary=None, emulator_res=None, connect_to_running_emulator=False,
                  gecko_log=None, homedir=None, baseurl=None, no_window=False, logdir=None,
                  busybox=None, symbols_path=None, timeout=None, socket_timeout=360,
-                 device_serial=None, adb_path=None, process_args=None):
+                 device_serial=None, adb_path=None, process_args=None,
+                 adb_host=None, adb_port=None):
         self.host = host
         self.port = self.local_port = port
         self.bin = bin
@@ -480,6 +481,7 @@ class Marionette(object):
         self.session = None
         self.session_id = None
         self.window = None
+        self.chrome_window = None
         self.runner = None
         self.emulator = None
         self.extra_emulators = []
@@ -487,8 +489,10 @@ class Marionette(object):
         self.no_window = no_window
         self._test_name = None
         self.timeout = timeout
-        self.socket_timeout=socket_timeout
+        self.socket_timeout = socket_timeout
         self.device_serial = device_serial
+        self.adb_host = adb_host
+        self.adb_port = adb_port
 
         if bin:
             port = int(self.port)
@@ -872,7 +876,7 @@ class Marionette(object):
     def current_window_handle(self):
         """Get the current window's handle.
 
-        Return an opaque server-assigned identifier to this window
+        Returns an opaque server-assigned identifier to this window
         that uniquely identifies it within this Marionette instance.
         This can be used to switch to this window at a later point.
 
@@ -882,6 +886,24 @@ class Marionette(object):
         """
         self.window = self._send_message("getWindowHandle", "value")
         return self.window
+
+    @property
+    def chrome_window_handle(self):
+        """Get the current chrome window's handle. Corresponds to
+        a chrome window that may itself contain tabs identified by
+        window_handles.
+
+        Returns an opaque server-assigned identifier to this window
+        that uniquely identifies it within this Marionette instance.
+        This can be used to switch to this window at a later point.
+
+        :returns: unique window handle
+        :rtype: string
+
+        """
+        self.chrome_window = self._send_message("getChromeWindowHandle", "value")
+        return self.chrome_window
+
 
     def get_window_position(self):
         """Get the current window's position
@@ -925,6 +947,21 @@ class Marionette(object):
 
         response = self._send_message("getWindowHandles", "value")
         return response
+
+    @property
+    def chrome_window_handles(self):
+        """Get a list of currently open chrome windows.
+
+        Each window handle is assigned by the server, and the list of
+        strings returned does not have a guaranteed ordering.
+
+        :returns: unordered list of unique window handles as strings
+
+        """
+
+        response = self._send_message("getChromeWindowHandles", "value")
+        return response
+
 
     @property
     def page_source(self):

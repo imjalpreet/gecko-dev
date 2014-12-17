@@ -10,6 +10,7 @@ let loopButton;
 let loopPanel = document.getElementById("loop-notification-panel");
 
 Components.utils.import("resource:///modules/UITour.jsm");
+const { LoopRooms } = Components.utils.import("resource:///modules/loop/LoopRooms.jsm", {});
 
 function test() {
   UITourTest();
@@ -85,7 +86,44 @@ let tests = [
       });
     });
   },
+  function test_notifyLoopChatWindowOpenedClosed(done) {
+    gContentAPI.observe((event, params) => {
+      is(event, "Loop:ChatWindowOpened", "Check Loop:ChatWindowOpened notification");
+      gContentAPI.observe((event, params) => {
+        is(event, "Loop:ChatWindowShown", "Check Loop:ChatWindowShown notification");
+        gContentAPI.observe((event, params) => {
+          is(event, "Loop:ChatWindowClosed", "Check Loop:ChatWindowClosed notification");
+          gContentAPI.observe((event, params) => {
+            ok(false, "No more notifications should have arrived");
+          });
+        });
+        done();
+      });
+      document.querySelector("#pinnedchats > chatbox").close();
+    });
+    LoopRooms.open("fakeTourRoom");
+  },
+  taskify(function* test_arrow_panel_position() {
+    ise(loopButton.open, false, "Menu should initially be closed");
+    let popup = document.getElementById("UITourTooltip");
+
+    yield showMenuPromise("loop");
+
+    let currentTarget = "loop-newRoom";
+    yield showInfoPromise(currentTarget, "This is " + currentTarget, "My arrow should be on the side");
+    is(popup.popupBoxObject.alignmentPosition, "start_before", "Check " + currentTarget + " position");
+
+    currentTarget = "loop-roomList";
+    yield showInfoPromise(currentTarget, "This is " + currentTarget, "My arrow should be on the side");
+    is(popup.popupBoxObject.alignmentPosition, "start_before", "Check " + currentTarget + " position");
+
+    currentTarget = "loop-signInUpLink";
+    yield showInfoPromise(currentTarget, "This is " + currentTarget, "My arrow should be underneath");
+    is(popup.popupBoxObject.alignmentPosition, "after_end", "Check " + currentTarget + " position");
+  }),
 ];
+
+// End tests
 
 function checkLoopPanelIsHidden() {
   ok(!loopPanel.hasAttribute("noautohide"), "@noautohide on the loop panel should have been cleaned up");

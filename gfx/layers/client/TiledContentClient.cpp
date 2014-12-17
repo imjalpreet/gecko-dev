@@ -719,7 +719,8 @@ TileClient::GetBackBuffer(const nsIntRegion& aDirtyRegion,
   // Try to re-use the front-buffer if possible
   if (mFrontBuffer &&
       mFrontBuffer->HasInternalBuffer() &&
-      mFrontLock->GetReadCount() == 1) {
+      mFrontLock->GetReadCount() == 1 &&
+      !(aMode == SurfaceMode::SURFACE_COMPONENT_ALPHA && !mFrontBufferOnWhite)) {
     // If we had a backbuffer we no longer care about it since we'll
     // re-use the front buffer.
     DiscardBackBuffer();
@@ -1056,6 +1057,9 @@ ClientTiledLayerBuffer::PostValidate(const nsIntRegion& aPaintRegion)
 {
   if (gfxPrefs::TiledDrawTargetEnabled() && mMoz2DTiles.size() > 0) {
     gfx::TileSet tileset;
+    for (size_t i = 0; i < mMoz2DTiles.size(); ++i) {
+      mMoz2DTiles[i].mTileOrigin -= mTilingOrigin;
+    }
     tileset.mTiles = &mMoz2DTiles[0];
     tileset.mTileCount = mMoz2DTiles.size();
     RefPtr<DrawTarget> drawTarget = gfx::Factory::CreateTiledDrawTarget(tileset);
@@ -1063,10 +1067,13 @@ ClientTiledLayerBuffer::PostValidate(const nsIntRegion& aPaintRegion)
 
     RefPtr<gfxContext> ctx = new gfxContext(drawTarget);
     ctx->SetMatrix(
-      ctx->CurrentMatrix().Scale(mResolution, mResolution));
+      ctx->CurrentMatrix().Scale(mResolution, mResolution).Translate(ThebesPoint(-mTilingOrigin)));
 
     mCallback(mPaintedLayer, ctx, aPaintRegion, DrawRegionClip::DRAW, nsIntRegion(), mCallbackData);
     mMoz2DTiles.clear();
+    // Reset:
+    mTilingOrigin = IntPoint(std::numeric_limits<int32_t>::max(),
+                             std::numeric_limits<int32_t>::max());
   }
 }
 
@@ -1188,6 +1195,8 @@ ClientTiledLayerBuffer::ValidateTile(TileClient aTile,
     }
 
     mMoz2DTiles.push_back(moz2DTile);
+    mTilingOrigin.x = std::min(mTilingOrigin.x, moz2DTile.mTileOrigin.x);
+    mTilingOrigin.y = std::min(mTilingOrigin.y, moz2DTile.mTileOrigin.y);
 
     nsIntRegionRectIterator it(aDirtyRegion);
     for (const nsIntRect* dirtyRect = it.Next(); dirtyRect != nullptr; dirtyRect = it.Next()) {

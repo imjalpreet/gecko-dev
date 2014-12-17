@@ -4205,7 +4205,7 @@ MacroAssemblerARMCompat::callWithABI(Register fun, MoveOp::Type result)
 }
 
 void
-MacroAssemblerARMCompat::handleFailureWithHandler(void *handler)
+MacroAssemblerARMCompat::handleFailureWithHandlerTail(void *handler)
 {
     // Reserve space for exception information.
     int size = (sizeof(ResumeFromException) + 7) & ~7;
@@ -4213,18 +4213,11 @@ MacroAssemblerARMCompat::handleFailureWithHandler(void *handler)
     ma_sub(Imm32(size), sp);
     ma_mov(sp, r0);
 
-    // Ask for an exception handler.
+    // Call the handler.
     setupUnalignedABICall(1, r1);
     passABIArg(r0);
     callWithABI(handler);
 
-    JitCode *excTail = GetJitContext()->runtime->jitRuntime()->getExceptionTail();
-    branch(excTail);
-}
-
-void
-MacroAssemblerARMCompat::handleFailureWithHandlerTail()
-{
     Label entryFrame;
     Label catch_;
     Label finally;
@@ -4609,15 +4602,13 @@ MacroAssemblerARMCompat::roundf(FloatRegister input, Register output, Label *bai
     Label handleZero;
     Label handleNeg;
     Label fin;
+
     // Do a compare based on the original value, then do most other things based
     // on the shifted value.
-    ma_vcmpz_f32(input);
-    // Since we already know the sign bit, flip all numbers to be positive,
-    // stored in tmp.
-    ma_vabs_f32(input, tmp);
-    as_vmrs(pc);
+    compareFloat(input, NoVFPRegister);
     ma_b(&handleZero, Assembler::Equal);
     ma_b(&handleNeg, Assembler::Signed);
+
     // NaN is always a bail condition, just bail directly.
     ma_b(bail, Assembler::Overflow);
 
@@ -4630,8 +4621,11 @@ MacroAssemblerARMCompat::roundf(FloatRegister input, Register output, Label *bai
     // the biggest number less than 0.5f would undesirably round up to 1), and
     // store the result into tmp.
     ma_vimm_f32(GetBiggestNumberLessThan(0.5f), ScratchFloat32Reg);
-    ma_vadd_f32(ScratchFloat32Reg, tmp, tmp);
+    ma_vadd_f32(ScratchFloat32Reg, input, tmp);
 
+    // Note: it doesn't matter whether x + .5 === x or not here, as it doesn't
+    // affect the semantics of the float to unsigned conversion (in particular,
+    // we are not applying any fixup after the operation).
     ma_vcvt_F32_U32(tmp, ScratchFloat32Reg.uintOverlay());
     ma_vxfer(VFPRegister(ScratchFloat32Reg).uintOverlay(), output);
     ma_mov(output, output, SetCond);
@@ -4639,6 +4633,7 @@ MacroAssemblerARMCompat::roundf(FloatRegister input, Register output, Label *bai
     ma_b(&fin);
 
     bind(&handleZero);
+
     // Move the whole float32 into the output reg, if it is non-zero, then the
     // original value was -0.0.
     as_vxfer(output, InvalidReg, input, FloatToCore, Always, 0);
@@ -4649,22 +4644,35 @@ MacroAssemblerARMCompat::roundf(FloatRegister input, Register output, Label *bai
     bind(&handleNeg);
 
     // Add 0.5 to negative numbers, storing the result into tmp.
+    ma_vneg_f32(input, tmp);
     ma_vimm_f32(0.5f, ScratchFloat32Reg);
-    ma_vadd_f32(ScratchFloat32Reg, tmp, tmp);
+    ma_vadd_f32(tmp, ScratchFloat32Reg, ScratchFloat32Reg);
+
+    // Adding 0.5 to a float input has chances to yield the wrong result, if
+    // the input is too large. In this case, skip the -1 adjustment made below.
+    compareFloat(ScratchFloat32Reg, tmp);
 
     // Negative case, negate, then start dancing. This number may be positive,
     // since we added 0.5.
-    ma_vcvt_F32_U32(tmp, ScratchFloat32Reg.uintOverlay());
-    ma_vxfer(VFPRegister(ScratchFloat32Reg).uintOverlay(), output);
+    // /!\ The conditional jump afterwards depends on these two instructions
+    //     *not* setting the status flags. They need to not change after the
+    //     comparison above.
+    ma_vcvt_F32_U32(ScratchFloat32Reg, tmp.uintOverlay());
+    ma_vxfer(VFPRegister(tmp).uintOverlay(), output);
+
+    Label flipSign;
+    ma_b(&flipSign, Equal);
 
     // -output is now a correctly rounded value, unless the original value was
     // exactly halfway between two integers, at which point, it has been rounded
     // away from zero, when it should be rounded towards \infty.
-    ma_vcvt_U32_F32(ScratchFloat32Reg.uintOverlay(), ScratchFloat32Reg);
-    compareFloat(ScratchFloat32Reg, tmp);
+    ma_vcvt_U32_F32(tmp.uintOverlay(), tmp);
+    compareFloat(tmp, ScratchFloat32Reg);
     ma_sub(output, Imm32(1), output, NoSetCond, Equal);
+
     // Negate the output. Since INT_MIN < -INT_MAX, even after adding 1, the
     // result will still be a negative number.
+    bind(&flipSign);
     ma_rsb(output, Imm32(0), output, SetCond);
 
     // If the result looks non-negative, then this value didn't actually fit
@@ -4686,8 +4694,6 @@ MacroAssemblerARMCompat::jumpWithPatch(RepatchLabel *label, Condition cond)
     CodeOffsetJump ret(bo.getOffset(), pe.index());
     return ret;
 }
-
-#ifdef JSGC_GENERATIONAL
 
 void
 MacroAssemblerARMCompat::branchPtrInNurseryRange(Condition cond, Register ptr, Register temp,
@@ -4995,5 +5001,3 @@ template void
 js::jit::MacroAssemblerARMCompat::atomicFetchOp(int nbytes, bool signExtend, AtomicOp op,
                                                 const Register &value, const BaseIndex &mem,
                                                 Register temp, Register output);
-
-#endif

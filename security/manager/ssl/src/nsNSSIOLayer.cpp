@@ -103,12 +103,12 @@ typedef enum {ASK, AUTO} SSM_UserCertChoice;
 // from TLS 1.2 to earlier versions (bug 861310).
 static const bool FALSE_START_REQUIRE_FORWARD_SECRECY_DEFAULT = true;
 
-// XXX(perf bug 940787): We currently require NPN because there is a very
-// high (perfect so far) correlation between servers that are false-start-
-// tolerant and servers that support NPN, according to Google. Without this, we
-// will run into interop issues with a small percentage of servers that stop
-// responding when we attempt to false start.
-static const bool FALSE_START_REQUIRE_NPN_DEFAULT = true;
+// Historically, we have required that the server negotiate ALPN or NPN in
+// order to false start, as a compatibility hack to work around
+// implementations that just stop responding during false start. However, now
+// false start is resricted to modern crypto (TLS 1.2 and AEAD cipher suites)
+// so it is less likely that requring NPN or ALPN is still necessary.
+static const bool FALSE_START_REQUIRE_NPN_DEFAULT = false;
 
 } // unnamed namespace
 
@@ -870,18 +870,21 @@ nsSSLIOLayerHelpers::rememberTolerantAtVersion(const nsACString& hostName,
   mTLSIntoleranceInfo.Put(key, entry);
 }
 
-void nsSSLIOLayerHelpers::forgetIntolerance(const nsACString& hostName,
-                                            int16_t port)
+uint16_t
+nsSSLIOLayerHelpers::forgetIntolerance(const nsACString& hostName,
+                                       int16_t port)
 {
   nsCString key;
   getSiteKey(hostName, port, key);
 
   MutexAutoLock lock(mutex);
 
+  uint16_t tolerant = 0;
   IntoleranceEntry entry;
   if (mTLSIntoleranceInfo.Get(key, &entry)) {
     entry.AssertInvariant();
 
+    tolerant = entry.tolerant;
     entry.intolerant = 0;
     entry.intoleranceReason = 0;
     if (entry.strongCipherStatus != StrongCiphersWorked) {
@@ -891,6 +894,8 @@ void nsSSLIOLayerHelpers::forgetIntolerance(const nsACString& hostName,
     entry.AssertInvariant();
     mTLSIntoleranceInfo.Put(key, entry);
   }
+
+  return tolerant;
 }
 
 // returns true if we should retry the handshake
@@ -903,7 +908,47 @@ nsSSLIOLayerHelpers::rememberIntolerantAtVersion(const nsACString& hostName,
 {
   if (intolerant <= minVersion || intolerant <= mVersionFallbackLimit) {
     // We can't fall back any further. Assume that intolerance isn't the issue.
-    forgetIntolerance(hostName, port);
+    uint32_t tolerant = forgetIntolerance(hostName, port);
+    // If we know the server is tolerant at the version, we don't have to
+    // gather the telemetry.
+    if (intolerant <= tolerant) {
+      return false;
+    }
+
+    uint32_t fallbackLimitBucket = 0;
+    // added if the version has reached the min version.
+    if (intolerant <= minVersion) {
+      switch (minVersion) {
+        case SSL_LIBRARY_VERSION_TLS_1_0:
+          fallbackLimitBucket += 1;
+          break;
+        case SSL_LIBRARY_VERSION_TLS_1_1:
+          fallbackLimitBucket += 2;
+          break;
+        case SSL_LIBRARY_VERSION_TLS_1_2:
+          fallbackLimitBucket += 3;
+          break;
+      }
+    }
+    // added if the version has reached the fallback limit.
+    if (intolerant <= mVersionFallbackLimit) {
+      switch (mVersionFallbackLimit) {
+        case SSL_LIBRARY_VERSION_TLS_1_0:
+          fallbackLimitBucket += 4;
+          break;
+        case SSL_LIBRARY_VERSION_TLS_1_1:
+          fallbackLimitBucket += 8;
+          break;
+        case SSL_LIBRARY_VERSION_TLS_1_2:
+          fallbackLimitBucket += 12;
+          break;
+      }
+    }
+    if (fallbackLimitBucket) {
+      Telemetry::Accumulate(Telemetry::SSL_FALLBACK_LIMIT_REACHED,
+                            fallbackLimitBucket);
+    }
+
     return false;
   }
 
@@ -1799,13 +1844,14 @@ void
 nsSSLIOLayerHelpers::loadVersionFallbackLimit()
 {
   // see nsNSSComponent::setEnabledTLSVersions for pref handling rules
-  int32_t limit = 1;   // 1 = TLS 1.0
-  Preferences::GetInt("security.tls.version.fallback-limit", &limit);
-  limit += SSL_LIBRARY_VERSION_3_0;
-  mVersionFallbackLimit = (uint16_t)limit;
-  if (limit != (int32_t)mVersionFallbackLimit) { // overflow check
-    mVersionFallbackLimit = SSL_LIBRARY_VERSION_TLS_1_0;
-  }
+  uint32_t limit = Preferences::GetUint("security.tls.version.fallback-limit",
+                                        3); // 3 = TLS 1.2
+  SSLVersionRange defaults = { SSL_LIBRARY_VERSION_TLS_1_2,
+                               SSL_LIBRARY_VERSION_TLS_1_2 };
+  SSLVersionRange filledInRange;
+  nsNSSComponent::FillTLSVersionRange(filledInRange, limit, limit, defaults);
+
+  mVersionFallbackLimit = filledInRange.max;
 }
 
 void

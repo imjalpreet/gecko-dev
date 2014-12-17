@@ -375,7 +375,8 @@ class ExclusiveContext : public ThreadSafeContext
     }
 
     // Zone local methods that can be used freely from an ExclusiveContext.
-    types::TypeObject *getNewType(const Class *clasp, TaggedProto proto, JSFunction *fun = nullptr);
+    types::TypeObject *getNewType(const Class *clasp, TaggedProto proto,
+                                  JSObject *associated = nullptr);
     types::TypeObject *getSingletonType(const Class *clasp, TaggedProto proto);
     inline js::LifoAlloc &typeLifoAlloc();
 
@@ -535,11 +536,9 @@ struct JSContext : public js::ExclusiveContext,
                                    MaybeAllowCrossCompartment = DONT_ALLOW_CROSS_COMPARTMENT) const;
 
     // The generational GC nursery may only be used on the main thread.
-#ifdef JSGC_GENERATIONAL
     inline js::Nursery &nursery() {
         return runtime_->gc.nursery;
     }
-#endif
 
     void minorGC(JS::gcreason::Reason reason) {
         runtime_->gc.minorGC(this, reason);
@@ -980,6 +979,8 @@ bool intrinsic_TypeDescrIsSimpleType(JSContext *cx, unsigned argc, Value *vp);
 bool intrinsic_TypeDescrIsArrayType(JSContext *cx, unsigned argc, Value *vp);
 
 bool intrinsic_IsSuspendedStarGenerator(JSContext *cx, unsigned argc, Value *vp);
+bool intrinsic_IsArrayIterator(JSContext *cx, unsigned argc, Value *vp);
+bool intrinsic_IsStringIterator(JSContext *cx, unsigned argc, Value *vp);
 
 class AutoLockForExclusiveAccess
 {

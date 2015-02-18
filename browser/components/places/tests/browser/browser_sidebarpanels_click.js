@@ -53,11 +53,10 @@ function test() {
     init: function(aCallback) {
       // Add a history entry.
       let uri = PlacesUtils._uri(TEST_URL);
-      addVisits(
-        { uri: uri, visitDate: Date.now() * 1000,
-          transition: PlacesUtils.history.TRANSITION_TYPED },
-        window,
-        aCallback);
+      PlacesTestUtils.addVisits({
+        uri: uri, visitDate: Date.now() * 1000,
+        transition: PlacesUtils.history.TRANSITION_TYPED
+      }).then(aCallback);
     },
     prepare: function() {
       sidebar.contentDocument.getElementById("byvisited").doCommand();
@@ -68,7 +67,7 @@ function test() {
       is(tree.selectedNode.itemId, -1, "The selected node is not bookmarked");
     },
     cleanup: function(aCallback) {
-      waitForClearHistory(aCallback);
+      PlacesTestUtils.clearHistory().then(aCallback);
     },
     sidebarName: HISTORY_SIDEBAR_ID,
     treeName: HISTORY_SIDEBAR_TREE_ID,
@@ -154,5 +153,5 @@ function test() {
   }
 
   // Ensure history is clean before starting the test.
-  waitForClearHistory(runNextTest);
+  PlacesTestUtils.clearHistory().then(runNextTest);
 }

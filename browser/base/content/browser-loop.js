@@ -6,15 +6,55 @@
 let LoopUI;
 
 XPCOMUtils.defineLazyModuleGetter(this, "injectLoopAPI", "resource:///modules/loop/MozLoopAPI.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "LoopRooms", "resource:///modules/loop/LoopRooms.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "MozLoopService", "resource:///modules/loop/MozLoopService.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PanelFrame", "resource:///modules/PanelFrame.jsm");
 
 
 (function() {
   LoopUI = {
+    /**
+     * @var {XULWidgetSingleWrapper} toolbarButton Getter for the Loop toolbarbutton
+     *                                             instance for this window.
+     */
     get toolbarButton() {
       delete this.toolbarButton;
       return this.toolbarButton = CustomizableUI.getWidget("loop-button").forWindow(window);
+    },
+
+    /**
+     * @var {XULElement} panel Getter for the Loop panel element.
+     */
+    get panel() {
+      delete this.panel;
+      return this.panel = document.getElementById("loop-notification-panel");
+    },
+
+    /**
+     * @var {XULElement|null} browser Getter for the Loop panel browser element.
+     *                                Will be NULL if the panel hasn't loaded yet.
+     */
+    get browser() {
+      let browser = document.querySelector("#loop-notification-panel > #loop-panel-iframe");
+      if (browser) {
+        delete this.browser;
+        this.browser = browser;
+      }
+      return browser;
+    },
+
+    /**
+     * @var {String|null} selectedTab Getter for the name of the currently selected
+     *                                tab inside the Loop panel. Will be NULL if
+     *                                the panel hasn't loaded yet.
+     */
+    get selectedTab() {
+      if (!this.browser) {
+        return null;
+      }
+
+      let selectedTab = this.browser.contentDocument.querySelector(".tab-view > .selected");
+      return selectedTab && selectedTab.getAttribute("data-tab-name");
     },
 
     /**
@@ -31,6 +71,26 @@ XPCOMUtils.defineLazyModuleGetter(this, "PanelFrame", "resource:///modules/Panel
           resolve();
         });
       });
+    },
+
+    /**
+     * Toggle between opening or hiding the Loop panel.
+     *
+     * @param {DOMEvent} [event] Optional event that triggered the call to this
+     *                           function.
+     * @param {String}   [tabId] Optional name of the tab to select after the panel
+     *                           has opened. Does nothing when the panel is hidden.
+     * @return {Promise}
+     */
+    togglePanel: function(event, tabId = null) {
+      if (this.panel.state == "open") {
+        return new Promise(resolve => {
+          this.panel.hidePopup();
+          resolve();
+        });
+      }
+
+      return this.openCallPanel(event, tabId);
     },
 
     /**
@@ -84,8 +144,70 @@ XPCOMUtils.defineLazyModuleGetter(this, "PanelFrame", "resource:///modules/Panel
         // Used to clear the temporary "login" state from the button.
         Services.obs.notifyObservers(null, "loop-status-changed", null);
 
-        PanelFrame.showPopup(window, event ? event.target : this.toolbarButton.node,
-                             "loop", null, "about:looppanel", null, callback);
+        this.shouldResumeTour().then((resume) => {
+          if (resume) {
+            // Assume the conversation with the visitor wasn't open since we would
+            // have resumed the tour as soon as the visitor joined if it was (and
+            // the pref would have been set to false already.
+            MozLoopService.resumeTour("waiting");
+            resolve();
+            return;
+          }
+
+          PanelFrame.showPopup(window, event ? event.target : this.toolbarButton.node,
+                               "loop", null, "about:looppanel", null, callback);
+        });
+      });
+    },
+
+    /**
+     * Method to know whether actions to open the panel should instead resume the tour.
+     *
+     * We need the panel to be opened via UITour so that it gets @noautohide.
+     *
+     * @return {Promise} resolving with a {Boolean} of whether the tour should be resumed instead of
+     *                   opening the panel.
+     */
+    shouldResumeTour: Task.async(function* () {
+      // Resume the FTU tour if this is the first time a room was joined by
+      // someone else since the tour.
+      if (!Services.prefs.getBoolPref("loop.gettingStarted.resumeOnFirstJoin")) {
+        return false;
+      }
+
+      if (!LoopRooms.participantsCount) {
+        // Nobody is in the rooms
+        return false;
+      }
+
+      let roomsWithNonOwners = yield this.roomsWithNonOwners();
+      if (!roomsWithNonOwners.length) {
+        // We were the only one in a room but we want to know about someone else joining.
+        return false;
+      }
+
+      return true;
+    }),
+
+    /**
+     * @return {Promise} resolved with an array of Rooms with participants (excluding owners)
+     */
+    roomsWithNonOwners: function() {
+      return new Promise(resolve => {
+        LoopRooms.getAll((error, rooms) => {
+          let roomsWithNonOwners = [];
+          for (let room of rooms) {
+            if (!("participants" in room)) {
+              continue;
+            }
+            let numNonOwners = room.participants.filter(participant => !participant.owner).length;
+            if (!numNonOwners) {
+              continue;
+            }
+            roomsWithNonOwners.push(room);
+          }
+          resolve(roomsWithNonOwners);
+        });
       });
     },
 
@@ -130,6 +252,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "PanelFrame", "resource:///modules/Panel
       let state = "";
       if (MozLoopService.errors.size) {
         state = "error";
+      } else if (MozLoopService.screenShareActive) {
+        state = "action";
       } else if (aReason == "login" && MozLoopService.userProfile) {
         state = "active";
       } else if (MozLoopService.doNotDisturb) {
@@ -174,8 +298,9 @@ XPCOMUtils.defineLazyModuleGetter(this, "PanelFrame", "resource:///modules/Panel
       if (options.sound) {
         // This will not do anything, until bug bug 1105222 is resolved.
         notificationOptions.mozbehavior = {
-          soundFile: `chrome://browser/content/loop/shared/sounds/${options.sound}.ogg`
+          soundFile: ""
         };
+        this.playSound(options.sound);
       }
 
       let notification = new window.Notification(options.title, notificationOptions);

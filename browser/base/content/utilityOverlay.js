@@ -14,7 +14,8 @@ XPCOMUtils.defineLazyGetter(this, "BROWSER_NEW_TAB_URL", function () {
 
   function getNewTabPageURL() {
     if (PrivateBrowsingUtils.isWindowPrivate(window) &&
-        !PrivateBrowsingUtils.permanentPrivateBrowsing) {
+        !PrivateBrowsingUtils.permanentPrivateBrowsing &&
+        !Services.prefs.prefHasUserValue(PREF)) {
       return "about:privatebrowsing";
     }
 
@@ -222,6 +223,7 @@ function openLinkIn(url, where, params) {
   var aIsPrivate            = params.private;
   var aSkipTabAnimation     = params.skipTabAnimation;
   var aAllowPinnedTabHostChange = !!params.allowPinnedTabHostChange;
+  var aNoReferrer           = params.noReferrer;
 
   if (where == "save") {
     if (!aInitiatingDoc) {
@@ -309,8 +311,6 @@ function openLinkIn(url, where, params) {
   // result in a new frontmost window (e.g. "javascript:window.open('');").
   w.focus();
 
-  let newTab;
-
   switch (where) {
   case "current":
     let flags = Ci.nsIWebNavigation.LOAD_FLAGS_NONE;
@@ -333,7 +333,7 @@ function openLinkIn(url, where, params) {
     loadInBackground = !loadInBackground;
     // fall through
   case "tab":
-    newTab = w.gBrowser.loadOneTab(url, {
+    w.gBrowser.loadOneTab(url, {
       referrerURI: aReferrerURI,
       charset: aCharset,
       postData: aPostData,
@@ -341,7 +341,8 @@ function openLinkIn(url, where, params) {
       allowThirdPartyFixup: aAllowThirdPartyFixup,
       relatedToCurrent: aRelatedToCurrent,
       skipAnimation: aSkipTabAnimation,
-      allowMixedContent: aAllowMixedContent
+      allowMixedContent: aAllowMixedContent,
+      noReferrer: aNoReferrer
     });
     break;
   }
@@ -349,12 +350,6 @@ function openLinkIn(url, where, params) {
   w.gBrowser.selectedBrowser.focus();
 
   if (!loadInBackground && w.isBlankPageURL(url)) {
-    if (newTab && gMultiProcessBrowser) {
-      // Remote browsers are switched to asynchronously, and we need to
-      // ensure that the location bar remains focused in that case rather
-      // than the content area being focused.
-      newTab._skipContentFocus = true;
-    }
     w.focusAndSelectUrlBar();
   }
 }

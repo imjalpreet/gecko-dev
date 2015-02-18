@@ -70,27 +70,6 @@ add_task(function* insert_bookmark_notitle_notification() {
                  ]);
 });
 
-add_task(function* insert_bookmark_keyword_notification() {
-  let observer = expectNotifications();
-  let bm = yield PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
-                                                parentGuid: PlacesUtils.bookmarks.unfiledGuid,
-                                                url: new URL("http://example.com/"),
-                                                keyword: "Kw" });
-  let itemId = yield PlacesUtils.promiseItemId(bm.guid);
-  let parentId = yield PlacesUtils.promiseItemId(bm.parentGuid);
-  // Keywords are case-insensitive.
-  Assert.equal(bm.keyword, "kw");
-  observer.check([ { name: "onItemAdded",
-                     arguments: [ itemId, parentId, bm.index, bm.type,
-                                  bm.url, null, bm.dateAdded,
-                                  bm.guid, bm.parentGuid ] },
-                   { name: "onItemChanged",
-                     arguments: [ itemId, "keyword", false, bm.keyword,
-                                  bm.lastModified, bm.type, parentId,
-                                  bm.guid, bm.parentGuid ] }
-                 ]);
-});
-
 add_task(function* insert_bookmark_tag_notification() {
   let bm = yield PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
                                                 parentGuid: PlacesUtils.bookmarks.unfiledGuid,
@@ -165,32 +144,6 @@ add_task(function* update_bookmark_uri() {
 
   observer.check([ { name: "onItemChanged",
                      arguments: [ itemId, "uri", false, bm.url.href,
-                                  bm.lastModified, bm.type, parentId, bm.guid,
-                                  bm.parentGuid ] }
-                 ]);
-});
-
-add_task(function* update_bookmark_keyword() {
-  let bm = yield PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
-                                                parentGuid: PlacesUtils.bookmarks.unfiledGuid,
-                                                url: new URL("http://keyword.example.com/") });
-  let observer = expectNotifications();
-  bm = yield PlacesUtils.bookmarks.update({ guid: bm.guid, keyword: "kW" });
-  // Keywords are case-insensitive.
-  Assert.equal(bm.keyword, "kw");
-  let itemId = yield PlacesUtils.promiseItemId(bm.guid);
-  let parentId = yield PlacesUtils.promiseItemId(bm.parentGuid);
-
-  observer.check([ { name: "onItemChanged",
-                     arguments: [ itemId, "keyword", false, bm.keyword,
-                                  bm.lastModified, bm.type, parentId, bm.guid,
-                                  bm.parentGuid ] }
-                 ]);
-
-  observer = expectNotifications();
-  bm = yield PlacesUtils.bookmarks.update({ guid: bm.guid, keyword: "" });
-  observer.check([ { name: "onItemChanged",
-                     arguments: [ itemId, "keyword", false, "",
                                   bm.lastModified, bm.type, parentId, bm.guid,
                                   bm.parentGuid ] }
                  ]);
@@ -412,6 +365,58 @@ add_task(function* eraseEverything_notification() {
                                   toolbarBm.url, toolbarBm.guid,
                                   toolbarBm.parentGuid ] }
                  ]);
+});
+
+add_task(function* reorder_notification() {
+  let bookmarks = [
+    { type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
+      url: "http://example1.com/",
+      parentGuid: PlacesUtils.bookmarks.unfiledGuid
+    },
+    { type: PlacesUtils.bookmarks.TYPE_FOLDER,
+      parentGuid: PlacesUtils.bookmarks.unfiledGuid
+    },
+    { type: PlacesUtils.bookmarks.TYPE_SEPARATOR,
+      parentGuid: PlacesUtils.bookmarks.unfiledGuid
+    },
+    { type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
+      url: "http://example2.com/",
+      parentGuid: PlacesUtils.bookmarks.unfiledGuid
+    },
+    { type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
+      url: "http://example3.com/",
+      parentGuid: PlacesUtils.bookmarks.unfiledGuid
+    },
+  ];
+  let sorted = [];
+  for (let bm of bookmarks){
+    sorted.push(yield PlacesUtils.bookmarks.insert(bm));
+  }
+
+  // Randomly reorder the array.
+  sorted.sort(() => 0.5 - Math.random());
+
+  let observer = expectNotifications();
+  yield PlacesUtils.bookmarks.reorder(PlacesUtils.bookmarks.unfiledGuid,
+                                      sorted.map(bm => bm.guid));
+
+  let expectedNotifications = [];
+  for (let i = 0; i < sorted.length; ++i) {
+    let child = sorted[i];
+    let childId = yield PlacesUtils.promiseItemId(child.guid);
+    expectedNotifications.push({ name: "onItemMoved",
+                                 arguments: [ childId,
+                                              PlacesUtils.unfiledBookmarksFolderId,
+                                              child.index,
+                                              PlacesUtils.unfiledBookmarksFolderId,
+                                              i,
+                                              child.type,
+                                              child.guid,
+                                              child.parentGuid,
+                                              child.parentGuid
+                                            ] });
+  }
+  observer.check(expectedNotifications);
 });
 
 function expectNotifications() {

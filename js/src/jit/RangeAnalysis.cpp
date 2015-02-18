@@ -14,7 +14,7 @@
 #include "jit/MIR.h"
 #include "jit/MIRGenerator.h"
 #include "jit/MIRGraph.h"
-#include "vm/NumericConversions.h"
+#include "js/Conversions.h"
 #include "vm/TypedArrayCommon.h"
 
 #include "jsopcodeinlines.h"
@@ -35,6 +35,7 @@ using mozilla::NegativeInfinity;
 using mozilla::PositiveInfinity;
 using mozilla::Swap;
 using JS::GenericNaN;
+using JS::ToInt32;
 
 // This algorithm is based on the paper "Eliminating Range Checks Using
 // Static Single Assignment Form" by Gough and Klaren.
@@ -155,6 +156,12 @@ RangeAnalysis::addBetaNodes()
 
         MCompare *compare = test->getOperand(0)->toCompare();
 
+        if (compare->compareType() == MCompare::Compare_Unknown ||
+            compare->compareType() == MCompare::Compare_Value)
+        {
+            continue;
+        }
+
         // TODO: support unsigned comparisons
         if (compare->compareType() == MCompare::Compare_UInt32)
             continue;
@@ -174,12 +181,12 @@ RangeAnalysis::addBetaNodes()
             conservativeUpper = GenericNaN();
         }
 
-        if (left->isConstant() && left->toConstant()->value().isNumber()) {
-            bound = left->toConstant()->value().toNumber();
+        if (left->isConstantValue() && left->constantValue().isNumber()) {
+            bound = left->constantValue().toNumber();
             val = right;
             jsop = ReverseCompareOp(jsop);
-        } else if (right->isConstant() && right->toConstant()->value().isNumber()) {
-            bound = right->toConstant()->value().toNumber();
+        } else if (right->isConstantValue() && right->constantValue().isNumber()) {
+            bound = right->constantValue().toNumber();
             val = left;
         } else if (left->type() == MIRType_Int32 && right->type() == MIRType_Int32) {
             MDefinition *smaller = nullptr;
@@ -1310,14 +1317,14 @@ MLsh::computeRange(TempAllocator &alloc)
     left.wrapAroundToInt32();
 
     MDefinition *rhs = getOperand(1);
-    if (!rhs->isConstant()) {
-        right.wrapAroundToShiftCount();
-        setRange(Range::lsh(alloc, &left, &right));
+    if (rhs->isConstantValue() && rhs->constantValue().isInt32()) {
+        int32_t c = rhs->constantValue().toInt32();
+        setRange(Range::lsh(alloc, &left, c));
         return;
     }
 
-    int32_t c = rhs->toConstant()->value().toInt32();
-    setRange(Range::lsh(alloc, &left, c));
+    right.wrapAroundToShiftCount();
+    setRange(Range::lsh(alloc, &left, &right));
 }
 
 void
@@ -1328,14 +1335,14 @@ MRsh::computeRange(TempAllocator &alloc)
     left.wrapAroundToInt32();
 
     MDefinition *rhs = getOperand(1);
-    if (!rhs->isConstant()) {
-        right.wrapAroundToShiftCount();
-        setRange(Range::rsh(alloc, &left, &right));
+    if (rhs->isConstantValue() && rhs->constantValue().isInt32()) {
+        int32_t c = rhs->constantValue().toInt32();
+        setRange(Range::rsh(alloc, &left, c));
         return;
     }
 
-    int32_t c = rhs->toConstant()->value().toInt32();
-    setRange(Range::rsh(alloc, &left, c));
+    right.wrapAroundToShiftCount();
+    setRange(Range::rsh(alloc, &left, &right));
 }
 
 void
@@ -1353,11 +1360,11 @@ MUrsh::computeRange(TempAllocator &alloc)
     right.wrapAroundToShiftCount();
 
     MDefinition *rhs = getOperand(1);
-    if (!rhs->isConstant()) {
-        setRange(Range::ursh(alloc, &left, &right));
-    } else {
-        int32_t c = rhs->toConstant()->value().toInt32();
+    if (rhs->isConstantValue() && rhs->constantValue().isInt32()) {
+        int32_t c = rhs->constantValue().toInt32();
         setRange(Range::ursh(alloc, &left, c));
+    } else {
+        setRange(Range::ursh(alloc, &left, &right));
     }
 
     MOZ_ASSERT(range()->lower() >= 0);
@@ -2203,15 +2210,17 @@ RangeAnalysis::analyze()
                 if (iter->isAsmJSLoadHeap()) {
                     MAsmJSLoadHeap *ins = iter->toAsmJSLoadHeap();
                     Range *range = ins->ptr()->range();
+                    uint32_t elemSize = TypedArrayElemSize(ins->accessType());
                     if (range && range->hasInt32LowerBound() && range->lower() >= 0 &&
-                        range->hasInt32UpperBound() && (uint32_t) range->upper() < minHeapLength) {
+                        range->hasInt32UpperBound() && uint32_t(range->upper()) + elemSize <= minHeapLength) {
                         ins->removeBoundsCheck();
                     }
                 } else if (iter->isAsmJSStoreHeap()) {
                     MAsmJSStoreHeap *ins = iter->toAsmJSStoreHeap();
                     Range *range = ins->ptr()->range();
+                    uint32_t elemSize = TypedArrayElemSize(ins->accessType());
                     if (range && range->hasInt32LowerBound() && range->lower() >= 0 &&
-                        range->hasInt32UpperBound() && (uint32_t) range->upper() < minHeapLength) {
+                        range->hasInt32UpperBound() && uint32_t(range->upper()) + elemSize <= minHeapLength) {
                         ins->removeBoundsCheck();
                     }
                 }
@@ -2508,7 +2517,10 @@ MToDouble::truncate()
 bool
 MLoadTypedArrayElementStatic::needTruncation(TruncateKind kind)
 {
-    if (kind >= IndirectTruncate)
+    // IndirectTruncate not possible, since it returns 'undefined'
+    // upon out of bounds read. Doing arithmetic on 'undefined' gives wrong
+    // results. So only set infallible if explicitly truncated.
+    if (kind == Truncate)
         setInfallible();
 
     return false;
@@ -2720,10 +2732,10 @@ CloneForDeadBranches(TempAllocator &alloc, MInstruction *candidate)
 
     MDefinitionVector operands(alloc);
     size_t end = candidate->numOperands();
-    for (size_t i = 0; i < end; i++) {
-        if (!operands.append(candidate->getOperand(i)))
-            return false;
-    }
+    if (!operands.reserve(end))
+        return false;
+    for (size_t i = 0; i < end; ++i)
+        operands.infallibleAppend(candidate->getOperand(i));
 
     MInstruction *clone = candidate->clone(alloc, operands);
     clone->setRange(nullptr);
@@ -2734,7 +2746,7 @@ CloneForDeadBranches(TempAllocator &alloc, MInstruction *candidate)
 
     candidate->block()->insertBefore(candidate, clone);
 
-    if (!candidate->isConstant()) {
+    if (!candidate->isConstantValue()) {
         MOZ_ASSERT(clone->canRecoverOnBailout());
         clone->setRecoveredOnBailout();
     }
@@ -3209,6 +3221,8 @@ RangeAnalysis::prepareForUCE(bool *shouldRemoveDeadCode)
 {
     *shouldRemoveDeadCode = false;
 
+    MDefinitionVector deadConditions(alloc());
+
     for (ReversePostorderIterator iter(graph_.rpoBegin()); iter != graph_.rpoEnd(); iter++) {
         MBasicBlock *block = *iter;
 
@@ -3223,6 +3237,7 @@ RangeAnalysis::prepareForUCE(bool *shouldRemoveDeadCode)
         // chosen based which of the successors has the unreachable flag which is
         // added by MBeta::computeRange on its own block.
         MTest *test = cond->toTest();
+        MDefinition *condition = test->input();
         MConstant *constant = nullptr;
         if (block == test->ifTrue()) {
             constant = MConstant::New(alloc(), BooleanValue(false));
@@ -3230,12 +3245,70 @@ RangeAnalysis::prepareForUCE(bool *shouldRemoveDeadCode)
             MOZ_ASSERT(block == test->ifFalse());
             constant = MConstant::New(alloc(), BooleanValue(true));
         }
+
+        if (DeadIfUnused(condition) && !condition->isInWorklist()) {
+            condition->setInWorklist();
+            if (!deadConditions.append(condition))
+                return false;
+        }
+
         test->block()->insertBefore(test, constant);
+
         test->replaceOperand(0, constant);
         JitSpew(JitSpew_Range, "Update condition of %d to reflect unreachable branches.",
                 test->id());
 
         *shouldRemoveDeadCode = true;
+    }
+
+    // Flag all fallible instructions which were indirectly used in the
+    // computation of the condition, such that we do not ignore
+    // bailout-paths which are used to shrink the input range of the
+    // operands of the condition.
+    for (size_t i = 0; i < deadConditions.length(); i++) {
+        MDefinition *cond = deadConditions[i];
+
+        // If this instruction is a guard, then there is not need to continue on
+        // this instruction.
+        if (cond->isGuard())
+            continue;
+
+        if (cond->range()) {
+            // Filter the range of the instruction based on its MIRType.
+            Range typeFilteredRange(cond);
+
+            // If the filtered range is updated by adding the original range,
+            // then the MIRType act as an effectful filter. As we do not know if
+            // this filtered Range might change or not the result of the
+            // previous comparison, we have to keep this instruction as a guard
+            // because it has to bailout in order to restrict the Range to its
+            // MIRType.
+            if (typeFilteredRange.update(cond->range())) {
+                cond->setGuard();
+                continue;
+            }
+        }
+
+        for (size_t op = 0, e = cond->numOperands(); op < e; op++) {
+            MDefinition *operand = cond->getOperand(op);
+            if (!DeadIfUnused(operand) || operand->isInWorklist())
+                continue;
+
+            // If the operand has no range, then its range is always infered
+            // from its MIRType, so it cannot be used change the result deduced
+            // by Range Analysis.
+            if (!operand->range())
+                continue;
+
+            operand->setInWorklist();
+            if (!deadConditions.append(operand))
+                return false;
+        }
+    }
+
+    while (!deadConditions.empty()) {
+        MDefinition *cond = deadConditions.popCopy();
+        cond->setNotInWorklist();
     }
 
     return true;

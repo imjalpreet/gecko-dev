@@ -43,6 +43,8 @@
 #include "nsCOMPtr.h"
 #include "ProfilerHelpers.h"
 #include "ReportInternalError.h"
+#include "WorkerPrivate.h"
+#include "WorkerScope.h"
 
 // Include this last to avoid path problems on Windows.
 #include "ActorsChild.h"
@@ -52,6 +54,7 @@ namespace dom {
 namespace indexedDB {
 
 using namespace mozilla::dom::quota;
+using namespace mozilla::dom::workers;
 using namespace mozilla::ipc;
 
 struct IDBObjectStore::StructuredCloneWriteInfo
@@ -295,8 +298,6 @@ StructuredCloneWriteCallback(JSContext* aCx,
     return true;
   }
 
-  MOZ_ASSERT(NS_IsMainThread(), "This can't work off the main thread!");
-
   {
     File* blob = nullptr;
     if (NS_SUCCEEDED(UNWRAP_OBJECT(Blob, aObj, blob))) {
@@ -463,7 +464,7 @@ StructuredCloneReadString(JSStructuredCloneReader* aReader,
   }
   length = NativeEndian::swapFromLittleEndian(length);
 
-  if (!aString.SetLength(length, fallible_t())) {
+  if (!aString.SetLength(length, fallible)) {
     NS_WARNING("Out of memory?");
     return false;
   }
@@ -605,16 +606,23 @@ public:
                aData.tag == SCTAG_DOM_BLOB);
     MOZ_ASSERT(aFile.mFile);
 
-    MOZ_ASSERT(NS_IsMainThread(),
-               "This wrapping currently only works on the main thread!");
-
     // It can happen that this IDB is chrome code, so there is no parent, but
     // still we want to set a correct parent for the new File object.
     nsCOMPtr<nsISupports> parent;
-    if (aDatabase && aDatabase->GetParentObject()) {
-      parent = aDatabase->GetParentObject();
+    if (NS_IsMainThread()) {
+      if (aDatabase && aDatabase->GetParentObject()) {
+        parent = aDatabase->GetParentObject();
+      } else {
+        parent = xpc::NativeGlobal(JS::CurrentGlobalOrNull(aCx));
+      }
     } else {
-      parent  = xpc::NativeGlobal(JS::CurrentGlobalOrNull(aCx));
+      WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
+      MOZ_ASSERT(workerPrivate);
+
+      WorkerGlobalScope* globalScope = workerPrivate->GlobalScope();
+      MOZ_ASSERT(globalScope);
+
+      parent = do_QueryObject(globalScope);
     }
 
     MOZ_ASSERT(parent);
@@ -669,9 +677,7 @@ public:
     MOZ_ASSERT(!aDatabase);
 
     // MutableFile can't be used in index creation, so just make a dummy object.
-    JS::Rooted<JSObject*> obj(aCx,
-      JS_NewObject(aCx, nullptr, JS::NullPtr(), JS::NullPtr()));
-
+    JS::Rooted<JSObject*> obj(aCx, JS_NewPlainObject(aCx));
     if (NS_WARN_IF(!obj)) {
       return false;
     }
@@ -697,8 +703,7 @@ public:
     //   File.name
     //   File.lastModifiedDate
 
-    JS::Rooted<JSObject*> obj(aCx,
-      JS_NewObject(aCx, nullptr, JS::NullPtr(), JS::NullPtr()));
+    JS::Rooted<JSObject*> obj(aCx, JS_NewPlainObject(aCx));
     if (NS_WARN_IF(!obj)) {
       return false;
     }
@@ -848,7 +853,7 @@ const JSClass IDBObjectStore::sDummyPropJSClass = {
 IDBObjectStore::IDBObjectStore(IDBTransaction* aTransaction,
                                const ObjectStoreSpec* aSpec)
   : mTransaction(aTransaction)
-  , mCachedKeyPath(JSVAL_VOID)
+  , mCachedKeyPath(JS::UndefinedValue())
   , mSpec(aSpec)
   , mId(aSpec->metadata().id())
   , mRooted(false)
@@ -863,7 +868,7 @@ IDBObjectStore::~IDBObjectStore()
   AssertIsOnOwningThread();
 
   if (mRooted) {
-    mCachedKeyPath = JSVAL_VOID;
+    mCachedKeyPath.setUndefined();
     mozilla::DropJSObjects(this);
   }
 }
@@ -973,9 +978,6 @@ IDBObjectStore::ClearCloneReadInfo(StructuredCloneReadInfo& aReadInfo)
   if (!aReadInfo.mCloneBuffer.data() && !aReadInfo.mFiles.Length()) {
     return;
   }
-
-  // If there's something to clear, we should be on the main thread.
-  NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
 
   ClearStructuredCloneBuffer(aReadInfo.mCloneBuffer);
   aReadInfo.mFiles.Clear();
@@ -1482,7 +1484,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(IDBObjectStore)
 
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mIndexes);
 
-  tmp->mCachedKeyPath = JSVAL_VOID;
+  tmp->mCachedKeyPath.setUndefined();
 
   if (tmp->mRooted) {
     mozilla::DropJSObjects(tmp);
@@ -1515,8 +1517,6 @@ IDBObjectStore::GetKeyPath(JSContext* aCx,
                            JS::MutableHandle<JS::Value> aResult,
                            ErrorResult& aRv)
 {
-  NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
-
   if (!mCachedKeyPath.isUndefined()) {
     JS::ExposeValueToActiveJS(mCachedKeyPath);
     aResult.set(mCachedKeyPath);

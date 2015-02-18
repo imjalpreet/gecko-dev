@@ -18,7 +18,12 @@ template <int V>
 class FFmpegDecoderModule : public PlatformDecoderModule
 {
 public:
-  static PlatformDecoderModule* Create() { return new FFmpegDecoderModule(); }
+  static already_AddRefed<PlatformDecoderModule>
+  Create()
+  {
+    nsRefPtr<PlatformDecoderModule> pdm = new FFmpegDecoderModule();
+    return pdm.forget();
+  }
 
   FFmpegDecoderModule() {}
   virtual ~FFmpegDecoderModule() {}
@@ -29,7 +34,7 @@ public:
   CreateVideoDecoder(const mp4_demuxer::VideoDecoderConfig& aConfig,
                      layers::LayersBackend aLayersBackend,
                      layers::ImageContainer* aImageContainer,
-                     MediaTaskQueue* aVideoTaskQueue,
+                     FlushableMediaTaskQueue* aVideoTaskQueue,
                      MediaDataDecoderCallback* aCallback) MOZ_OVERRIDE
   {
     nsRefPtr<MediaDataDecoder> decoder =
@@ -40,7 +45,7 @@ public:
 
   virtual already_AddRefed<MediaDataDecoder>
   CreateAudioDecoder(const mp4_demuxer::AudioDecoderConfig& aConfig,
-                     MediaTaskQueue* aAudioTaskQueue,
+                     FlushableMediaTaskQueue* aAudioTaskQueue,
                      MediaDataDecoderCallback* aCallback) MOZ_OVERRIDE
   {
     nsRefPtr<MediaDataDecoder> decoder =
@@ -57,6 +62,7 @@ public:
   {
     return FFmpegH264Decoder<V>::GetCodecId(aMimeType) != AV_CODEC_ID_NONE;
   }
+
 };
 
 } // namespace mozilla

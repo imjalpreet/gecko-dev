@@ -39,10 +39,10 @@ using mozilla::Nothing;
 /* static */ DebuggerMemory *
 DebuggerMemory::create(JSContext *cx, Debugger *dbg)
 {
-
-    Value memoryProto = dbg->object->getReservedSlot(Debugger::JSSLOT_DEBUG_MEMORY_PROTO);
-    RootedNativeObject memory(cx, NewNativeObjectWithGivenProto(cx, &class_,
-                                                                &memoryProto.toObject(), nullptr));
+    Value memoryProtoValue = dbg->object->getReservedSlot(Debugger::JSSLOT_DEBUG_MEMORY_PROTO);
+    RootedObject memoryProto(cx, &memoryProtoValue.toObject());
+    RootedNativeObject memory(cx, NewNativeObjectWithGivenProto(cx, &class_, memoryProto,
+                                                                NullPtr()));
     if (!memory)
         return nullptr;
 
@@ -197,19 +197,29 @@ DebuggerMemory::drainAllocationsLog(JSContext *cx, unsigned argc, Value *vp)
         if (!obj)
             return false;
 
-        mozilla::UniquePtr<Debugger::AllocationSite, JS::DeletePolicy<Debugger::AllocationSite> >
-            allocSite(dbg->allocationsLog.popFirst());
+        // Don't pop the AllocationSite yet. The queue's links are followed by
+        // the GC to find the AllocationSite, but are not barried, so we must
+        // edit them with great care. Use the queue entry in place, and then
+        // pop and delete together.
+        Debugger::AllocationSite *allocSite = dbg->allocationsLog.getFirst();
         RootedValue frame(cx, ObjectOrNullValue(allocSite->frame));
-        if (!JSObject::defineProperty(cx, obj, cx->names().frame, frame))
+        if (!DefineProperty(cx, obj, cx->names().frame, frame))
             return false;
 
         RootedValue timestampValue(cx, NumberValue(allocSite->when));
-        if (!JSObject::defineProperty(cx, obj, cx->names().timestamp, timestampValue))
+        if (!DefineProperty(cx, obj, cx->names().timestamp, timestampValue))
             return false;
 
         result->setDenseElement(i, ObjectValue(*obj));
+
+        // Pop the front queue entry, and delete it immediately, so that
+        // the GC sees the AllocationSite's RelocatablePtr barriers run
+        // atomically with the change to the graph (the queue link).
+        MOZ_ALWAYS_TRUE(dbg->allocationsLog.popFirst() == allocSite);
+        js_delete(allocSite);
     }
 
+    dbg->allocationsLogOverflowed = false;
     dbg->allocationsLogLength = 0;
     args.rval().setObject(*result);
     return true;
@@ -281,6 +291,14 @@ DebuggerMemory::setAllocationSamplingProbability(JSContext *cx, unsigned argc, V
 
     memory->getDebugger()->allocationSamplingProbability = probability;
     args.rval().setUndefined();
+    return true;
+}
+
+/* static */ bool
+DebuggerMemory::getAllocationsLogOverflowed(JSContext *cx, unsigned argc, Value *vp)
+{
+    THIS_DEBUGGER_MEMORY(cx, argc, vp, "(get allocationsLogOverflowed)", args, memory);
+    args.rval().setBoolean(memory->getDebugger()->allocationsLogOverflowed);
     return true;
 }
 
@@ -358,7 +376,7 @@ class Tally {
         RootedPlainObject obj(census.cx, NewBuiltinClassInstance<PlainObject>(census.cx));
         RootedValue countValue(census.cx, NumberValue(total_));
         if (!obj ||
-            !JSObject::defineProperty(census.cx, obj, census.cx->names().count, countValue))
+            !DefineProperty(census.cx, obj, census.cx->names().count, countValue))
         {
             return false;
         }
@@ -433,22 +451,22 @@ class ByJSType {
 
         RootedValue objectsReport(cx);
         if (!objects.report(census, &objectsReport) ||
-            !JSObject::defineProperty(cx, obj, cx->names().objects, objectsReport))
+            !DefineProperty(cx, obj, cx->names().objects, objectsReport))
             return false;
 
         RootedValue scriptsReport(cx);
         if (!scripts.report(census, &scriptsReport) ||
-            !JSObject::defineProperty(cx, obj, cx->names().scripts, scriptsReport))
+            !DefineProperty(cx, obj, cx->names().scripts, scriptsReport))
             return false;
 
         RootedValue stringsReport(cx);
         if (!strings.report(census, &stringsReport) ||
-            !JSObject::defineProperty(cx, obj, cx->names().strings, stringsReport))
+            !DefineProperty(cx, obj, cx->names().strings, stringsReport))
             return false;
 
         RootedValue otherReport(cx);
         if (!other.report(census, &otherReport) ||
-            !JSObject::defineProperty(cx, obj, cx->names().other, otherReport))
+            !DefineProperty(cx, obj, cx->names().other, otherReport))
             return false;
 
         report.setObject(*obj);
@@ -567,15 +585,15 @@ class ByObjectClass {
             // all "Object"), so let's make sure our hash table treats them all
             // as equivalent.
             bool has;
-            if (!JSObject::hasProperty(cx, obj, entryId, &has))
+            if (!HasOwnProperty(cx, obj, entryId, &has))
                 return false;
             if (has) {
-                fprintf(stderr, "already has %s\n", name);
+                fprintf(stderr, "already has own property '%s'\n", name);
                 MOZ_ASSERT(!has);
             }
 #endif
 
-            if (!JSObject::defineGeneric(cx, obj, entryId, assorterReport))
+            if (!DefineProperty(cx, obj, entryId, assorterReport))
                 return false;
         }
 
@@ -670,7 +688,7 @@ class ByUbinodeType {
                 return false;
             RootedId entryId(cx, AtomToId(atom));
 
-            if (!JSObject::defineGeneric(cx, obj, entryId, assorterReport))
+            if (!DefineProperty(cx, obj, entryId, assorterReport))
                 return false;
         }
 
@@ -795,6 +813,7 @@ DebuggerMemory::takeCensus(JSContext *cx, unsigned argc, Value *vp)
     JS_PSGS("trackingAllocationSites", getTrackingAllocationSites, setTrackingAllocationSites, 0),
     JS_PSGS("maxAllocationsLogLength", getMaxAllocationsLogLength, setMaxAllocationsLogLength, 0),
     JS_PSGS("allocationSamplingProbability", getAllocationSamplingProbability, setAllocationSamplingProbability, 0),
+    JS_PSG("allocationsLogOverflowed", getAllocationsLogOverflowed, 0),
     JS_PS_END
 };
 

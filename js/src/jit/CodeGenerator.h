@@ -33,14 +33,11 @@ class OutOfLineTestObject;
 class OutOfLineNewArray;
 class OutOfLineNewObject;
 class CheckOverRecursedFailure;
-class CheckOverRecursedFailurePar;
-class OutOfLineInterruptCheckPar;
 class OutOfLineInterruptCheckImplicit;
 class OutOfLineUnboxFloatingPoint;
 class OutOfLineStoreElementHole;
 class OutOfLineTypeOfV;
 class OutOfLineLoadTypedArray;
-class OutOfLineNewGCThingPar;
 class OutOfLineUpdateCache;
 class OutOfLineCallPostWriteBarrier;
 class OutOfLineIsCallable;
@@ -59,10 +56,11 @@ class CodeGenerator : public CodeGeneratorSpecific
   public:
     bool generate();
     bool generateAsmJS(AsmJSFunctionLabels *labels);
-    bool link(JSContext *cx, types::CompilerConstraintList *constraints);
+    bool link(JSContext *cx, CompilerConstraintList *constraints);
 
     void visitLabel(LLabel *lir);
     void visitNop(LNop *lir);
+    void visitMop(LMop *lir);
     void visitOsiPoint(LOsiPoint *lir);
     void visitGoto(LGoto *lir);
     void visitTableSwitch(LTableSwitch *ins);
@@ -94,7 +92,7 @@ class CodeGenerator : public CodeGeneratorSpecific
     void visitTestOAndBranch(LTestOAndBranch *lir);
     void visitTestVAndBranch(LTestVAndBranch *lir);
     void visitFunctionDispatch(LFunctionDispatch *lir);
-    void visitTypeObjectDispatch(LTypeObjectDispatch *lir);
+    void visitObjectGroupDispatch(LObjectGroupDispatch *lir);
     void visitBooleanToString(LBooleanToString *lir);
     void emitIntToString(Register input, Register output, Label *ool);
     void visitIntToString(LIntToString *lir);
@@ -112,8 +110,8 @@ class CodeGenerator : public CodeGeneratorSpecific
     void visitLambda(LLambda *lir);
     void visitLambdaArrow(LLambdaArrow *lir);
     void visitLambdaForSingleton(LLambdaForSingleton *lir);
-    void visitLambdaPar(LLambdaPar *lir);
     void visitPointer(LPointer *lir);
+    void visitNurseryObject(LNurseryObject *lir);
     void visitSlots(LSlots *lir);
     void visitLoadSlotT(LLoadSlotT *lir);
     void visitLoadSlotV(LLoadSlotV *lir);
@@ -158,13 +156,12 @@ class CodeGenerator : public CodeGeneratorSpecific
     void visitNewObject(LNewObject *lir);
     void visitOutOfLineNewObject(OutOfLineNewObject *ool);
     void visitNewTypedObject(LNewTypedObject *lir);
+    void visitSimdBox(LSimdBox *lir);
+    void visitSimdUnbox(LSimdUnbox *lir);
     void visitNewDeclEnvObject(LNewDeclEnvObject *lir);
     void visitNewCallObject(LNewCallObject *lir);
     void visitNewSingletonCallObject(LNewSingletonCallObject *lir);
-    void visitNewCallObjectPar(LNewCallObjectPar *lir);
     void visitNewStringObject(LNewStringObject *lir);
-    void visitNewPar(LNewPar *lir);
-    void visitNewDenseArrayPar(LNewDenseArrayPar *lir);
     void visitNewDerivedTypedObject(LNewDerivedTypedObject *lir);
     void visitInitElem(LInitElem *lir);
     void visitInitElemGetterSetter(LInitElemGetterSetter *lir);
@@ -224,19 +221,16 @@ class CodeGenerator : public CodeGeneratorSpecific
     void visitCompareS(LCompareS *lir);
     void visitCompareStrictS(LCompareStrictS *lir);
     void visitCompareVM(LCompareVM *lir);
-    void visitIsNullOrLikeUndefined(LIsNullOrLikeUndefined *lir);
-    void visitIsNullOrLikeUndefinedAndBranch(LIsNullOrLikeUndefinedAndBranch *lir);
-    void visitEmulatesUndefined(LEmulatesUndefined *lir);
-    void visitEmulatesUndefinedAndBranch(LEmulatesUndefinedAndBranch *lir);
+    void visitIsNullOrLikeUndefinedV(LIsNullOrLikeUndefinedV *lir);
+    void visitIsNullOrLikeUndefinedT(LIsNullOrLikeUndefinedT *lir);
+    void visitIsNullOrLikeUndefinedAndBranchV(LIsNullOrLikeUndefinedAndBranchV *lir);
+    void visitIsNullOrLikeUndefinedAndBranchT(LIsNullOrLikeUndefinedAndBranchT *lir);
     void emitConcat(LInstruction *lir, Register lhs, Register rhs, Register output);
     void visitConcat(LConcat *lir);
-    void visitConcatPar(LConcatPar *lir);
     void visitCharCodeAt(LCharCodeAt *lir);
     void visitFromCharCode(LFromCharCode *lir);
     void visitStringSplit(LStringSplit *lir);
     void visitFunctionEnvironment(LFunctionEnvironment *lir);
-    void visitForkJoinContext(LForkJoinContext *lir);
-    void visitGuardThreadExclusive(LGuardThreadExclusive *lir);
     void visitCallGetProperty(LCallGetProperty *lir);
     void visitCallGetElement(LCallGetElement *lir);
     void visitCallSetElement(LCallSetElement *lir);
@@ -251,6 +245,7 @@ class CodeGenerator : public CodeGeneratorSpecific
     void visitLoadElementHole(LLoadElementHole *lir);
     void visitLoadUnboxedPointerV(LLoadUnboxedPointerV *lir);
     void visitLoadUnboxedPointerT(LLoadUnboxedPointerT *lir);
+    void visitUnboxObjectOrNull(LUnboxObjectOrNull *lir);
     void visitStoreElementT(LStoreElementT *lir);
     void visitStoreElementV(LStoreElementV *lir);
     void visitStoreElementHoleT(LStoreElementHoleT *lir);
@@ -290,7 +285,6 @@ class CodeGenerator : public CodeGeneratorSpecific
                   Register temp0, Register temp1, unsigned numFormals,
                   JSObject *templateObject, bool saveAndRestore, Register resultreg);
     void visitRest(LRest *lir);
-    void visitRestPar(LRestPar *lir);
     void visitCallSetProperty(LCallSetProperty *ins);
     void visitCallDeleteProperty(LCallDeleteProperty *lir);
     void visitCallDeleteElement(LCallDeleteElement *lir);
@@ -302,9 +296,9 @@ class CodeGenerator : public CodeGeneratorSpecific
     void visitInstanceOfO(LInstanceOfO *ins);
     void visitInstanceOfV(LInstanceOfV *ins);
     void visitCallInstanceOf(LCallInstanceOf *ins);
-    void visitProfilerStackOp(LProfilerStackOp *lir);
     void visitGetDOMProperty(LGetDOMProperty *lir);
-    void visitGetDOMMember(LGetDOMMember *lir);
+    void visitGetDOMMemberV(LGetDOMMemberV *lir);
+    void visitGetDOMMemberT(LGetDOMMemberT *lir);
     void visitSetDOMProperty(LSetDOMProperty *lir);
     void visitCallDOMNative(LCallDOMNative *lir);
     void visitCallGetIntrinsicValue(LCallGetIntrinsicValue *lir);
@@ -312,7 +306,6 @@ class CodeGenerator : public CodeGeneratorSpecific
     void visitOutOfLineIsCallable(OutOfLineIsCallable *ool);
     void visitIsObject(LIsObject *lir);
     void visitIsObjectAndBranch(LIsObjectAndBranch *lir);
-    void visitHaveSameClass(LHaveSameClass *lir);
     void visitHasClass(LHasClass *lir);
     void visitAsmJSParameter(LAsmJSParameter *lir);
     void visitAsmJSReturn(LAsmJSReturn *ret);
@@ -324,11 +317,6 @@ class CodeGenerator : public CodeGeneratorSpecific
     void visitCheckOverRecursed(LCheckOverRecursed *lir);
     void visitCheckOverRecursedFailure(CheckOverRecursedFailure *ool);
 
-    void visitCheckOverRecursedPar(LCheckOverRecursedPar *lir);
-
-    void visitInterruptCheckPar(LInterruptCheckPar *lir);
-    void visitOutOfLineInterruptCheckPar(OutOfLineInterruptCheckPar *ool);
-
     void visitInterruptCheckImplicit(LInterruptCheckImplicit *ins);
     void visitOutOfLineInterruptCheckImplicit(OutOfLineInterruptCheckImplicit *ins);
 
@@ -336,7 +324,6 @@ class CodeGenerator : public CodeGeneratorSpecific
     void visitOutOfLineUnboxFloatingPoint(OutOfLineUnboxFloatingPoint *ool);
     void visitOutOfLineStoreElementHole(OutOfLineStoreElementHole *ool);
 
-    void visitOutOfLineNewGCThingPar(OutOfLineNewGCThingPar *ool);
     void loadJSScriptForBlock(MBasicBlock *block, Register reg);
     void loadOutermostJSScript(Register reg);
 
@@ -354,19 +341,13 @@ class CodeGenerator : public CodeGeneratorSpecific
     void visitSetPropertyCacheV(LSetPropertyCacheV *ins);
     void visitSetPropertyCacheT(LSetPropertyCacheT *ins);
     void visitGetNameCache(LGetNameCache *ins);
-    void visitCallsiteCloneCache(LCallsiteCloneCache *ins);
 
     void visitGetPropertyIC(OutOfLineUpdateCache *ool, DataPtr<GetPropertyIC> &ic);
-    void visitGetPropertyParIC(OutOfLineUpdateCache *ool, DataPtr<GetPropertyParIC> &ic);
     void visitSetPropertyIC(OutOfLineUpdateCache *ool, DataPtr<SetPropertyIC> &ic);
-    void visitSetPropertyParIC(OutOfLineUpdateCache *ool, DataPtr<SetPropertyParIC> &ic);
     void visitGetElementIC(OutOfLineUpdateCache *ool, DataPtr<GetElementIC> &ic);
-    void visitGetElementParIC(OutOfLineUpdateCache *ool, DataPtr<GetElementParIC> &ic);
     void visitSetElementIC(OutOfLineUpdateCache *ool, DataPtr<SetElementIC> &ic);
-    void visitSetElementParIC(OutOfLineUpdateCache *ool, DataPtr<SetElementParIC> &ic);
     void visitBindNameIC(OutOfLineUpdateCache *ool, DataPtr<BindNameIC> &ic);
     void visitNameIC(OutOfLineUpdateCache *ool, DataPtr<NameIC> &ic);
-    void visitCallsiteCloneIC(OutOfLineUpdateCache *ool, DataPtr<CallsiteCloneIC> &ic);
 
     void visitAssertRangeI(LAssertRangeI *ins);
     void visitAssertRangeD(LAssertRangeD *ins);
@@ -399,12 +380,6 @@ class CodeGenerator : public CodeGeneratorSpecific
                             bool strict, bool guardHoles, jsbytecode *profilerLeavePc);
 
     bool generateBranchV(const ValueOperand &value, Label *ifTrue, Label *ifFalse, FloatRegister fr);
-
-    void emitAllocateGCThingPar(LInstruction *lir, Register objReg, Register cxReg,
-                                Register tempReg1, Register tempReg2,
-                                NativeObject *templateObj);
-
-    void emitCallToUncompiledScriptPar(LInstruction *lir, Register calleeReg);
 
     void emitLambdaInit(Register resultReg, Register scopeChainReg,
                         const LambdaFunctionInfo &info);

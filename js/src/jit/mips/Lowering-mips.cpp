@@ -127,10 +127,19 @@ LIRGeneratorMIPS::visitBox(MBox *box)
 void
 LIRGeneratorMIPS::visitUnbox(MUnbox *unbox)
 {
+    MDefinition *inner = unbox->getOperand(0);
+
+    if (inner->type() == MIRType_ObjectOrNull) {
+        LUnboxObjectOrNull *lir = new(alloc()) LUnboxObjectOrNull(useRegisterAtStart(inner));
+        if (unbox->fallible())
+            assignSnapshot(lir, unbox->bailoutKind());
+        defineReuseInput(lir, unbox, 0);
+        return;
+    }
+
     // An unbox on mips reads in a type tag (either in memory or a register) and
     // a payload. Unlike most instructions consuming a box, we ask for the type
     // second, so that the result can re-use the first input.
-    MDefinition *inner = unbox->getOperand(0);
     MOZ_ASSERT(inner->type() == MIRType_Value);
 
     ensureDefined(inner);
@@ -378,13 +387,13 @@ LIRGeneratorMIPS::visitGuardShape(MGuardShape *ins)
 }
 
 void
-LIRGeneratorMIPS::visitGuardObjectType(MGuardObjectType *ins)
+LIRGeneratorMIPS::visitGuardObjectGroup(MGuardObjectGroup *ins)
 {
     MOZ_ASSERT(ins->obj()->type() == MIRType_Object);
 
     LDefinition tempObj = temp(LDefinition::OBJECT);
-    LGuardObjectType *guard = new(alloc()) LGuardObjectType(useRegister(ins->obj()), tempObj);
-    assignSnapshot(guard, Bailout_ObjectIdentityOrTypeGuard);
+    LGuardObjectGroup *guard = new(alloc()) LGuardObjectGroup(useRegister(ins->obj()), tempObj);
+    assignSnapshot(guard, ins->bailoutKind());
     add(guard, ins);
     redefine(ins, ins->obj());
 }
@@ -470,11 +479,10 @@ LIRGeneratorMIPS::visitAsmJSLoadHeap(MAsmJSLoadHeap *ins)
 
     // For MIPS it is best to keep the 'ptr' in a register if a bounds check
     // is needed.
-    if (ptr->isConstant() && !ins->needsBoundsCheck()) {
-        int32_t ptrValue = ptr->toConstant()->value().toInt32();
+    if (ptr->isConstantValue() && !ins->needsBoundsCheck()) {
         // A bounds check is only skipped for a positive index.
-        MOZ_ASSERT(ptrValue >= 0);
-        ptrAlloc = LAllocation(ptr->toConstant()->vp());
+        MOZ_ASSERT(ptr->constantValue().toInt32() >= 0);
+        ptrAlloc = LAllocation(ptr->constantVp());
     } else
         ptrAlloc = useRegisterAtStart(ptr);
 
@@ -488,9 +496,9 @@ LIRGeneratorMIPS::visitAsmJSStoreHeap(MAsmJSStoreHeap *ins)
     MOZ_ASSERT(ptr->type() == MIRType_Int32);
     LAllocation ptrAlloc;
 
-    if (ptr->isConstant() && !ins->needsBoundsCheck()) {
-        MOZ_ASSERT(ptr->toConstant()->value().toInt32() >= 0);
-        ptrAlloc = LAllocation(ptr->toConstant()->vp());
+    if (ptr->isConstantValue() && !ins->needsBoundsCheck()) {
+        MOZ_ASSERT(ptr->constantValue().toInt32() >= 0);
+        ptrAlloc = LAllocation(ptr->constantVp());
     } else
         ptrAlloc = useRegisterAtStart(ptr);
 
@@ -541,19 +549,13 @@ LIRGeneratorMIPS::visitStoreTypedArrayElementStatic(MStoreTypedArrayElementStati
 }
 
 void
-LIRGeneratorMIPS::visitForkJoinGetSlice(MForkJoinGetSlice *ins)
-{
-    MOZ_CRASH("NYI");
-}
-
-void
 LIRGeneratorMIPS::visitSimdBinaryArith(MSimdBinaryArith *ins)
 {
     MOZ_CRASH("NYI");
 }
 
 void
-LIRGeneratorMIPS::visitSimdTernaryBitwise(MSimdTernaryBitwise *ins)
+LIRGeneratorMIPS::visitSimdSelect(MSimdSelect *ins)
 {
     MOZ_CRASH("NYI");
 }

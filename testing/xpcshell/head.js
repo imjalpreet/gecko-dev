@@ -50,8 +50,9 @@ let _testLogger = new _LoggerClass("xpcshell/head.js", _dumpLog, [_add_params]);
 
 // Disable automatic network detection, so tests work correctly when
 // not connected to a network.
-let (ios = Components.classes["@mozilla.org/network/io-service;1"]
-           .getService(Components.interfaces.nsIIOService2)) {
+{
+  let ios = Components.classes["@mozilla.org/network/io-service;1"]
+                      .getService(Components.interfaces.nsIIOService2);
   ios.manageOfflineStatus = false;
   ios.offline = false;
 }
@@ -70,10 +71,9 @@ if (runningInParent &&
     "mozIAsyncHistory" in Components.interfaces) {
   // Ensure places history is enabled for xpcshell-tests as some non-FF
   // apps disable it.
-  let (prefs = Components.classes["@mozilla.org/preferences-service;1"]
-               .getService(Components.interfaces.nsIPrefBranch)) {
-    prefs.setBoolPref("places.history.enabled", true);
-  };
+  let prefs = Components.classes["@mozilla.org/preferences-service;1"]
+              .getService(Components.interfaces.nsIPrefBranch);
+  prefs.setBoolPref("places.history.enabled", true);
 }
 
 try {
@@ -101,16 +101,39 @@ catch (e) { }
 try {
   if (runningInParent &&
       "@mozilla.org/toolkit/crash-reporter;1" in Components.classes) {
-    let (crashReporter =
+    let crashReporter =
           Components.classes["@mozilla.org/toolkit/crash-reporter;1"]
-          .getService(Components.interfaces.nsICrashReporter)) {
-      crashReporter.UpdateCrashEventsDir();
-      crashReporter.minidumpPath = do_get_minidumpdir();
-    }
+          .getService(Components.interfaces.nsICrashReporter);
+    crashReporter.UpdateCrashEventsDir();
+    crashReporter.minidumpPath = do_get_minidumpdir();
   }
 }
 catch (e) { }
 
+// Configure a console listener so messages sent to it are logged as part
+// of the test.
+try {
+  let levelNames = {}
+  for (let level of ["debug", "info", "warn", "error"]) {
+    levelNames[Components.interfaces.nsIConsoleMessage[level]] = level;
+  }
+
+  let listener = {
+    QueryInterface : function(iid) {
+      if (!iid.equals(Components.interfaces.nsISupports) &&
+          !iid.equals(Components.interfaces.nsIConsoleListener)) {
+        throw Components.results.NS_NOINTERFACE;
+      }
+      return this;
+    },
+    observe : function (msg) {
+      do_print("CONSOLE_MESSAGE: (" + levelNames[msg.logLevel] + ") " + msg.toString());
+    }
+  };
+  Components.classes["@mozilla.org/consoleservice;1"]
+            .getService(Components.interfaces.nsIConsoleService)
+            .registerListener(listener);
+} catch (e) {}
 /**
  * Date.now() is not necessarily monotonically increasing (insert sob story
  * about times not being the right tool to use for measuring intervals of time,
@@ -374,10 +397,9 @@ function _setupDebuggerServer(breakpointFiles, callback) {
         try {
           // Add a breakpoint for the first line in our test files.
           let threadActor = subject.wrappedJSObject;
-          let location = { line: 1 };
           for (let file of breakpointFiles) {
             let sourceActor = threadActor.sources.source({originalUrl: file});
-            sourceActor.setBreakpoint(location);
+            sourceActor.setBreakpoint(1);
           }
         } catch (ex) {
           do_print("Failed to initialize breakpoints: " + ex + "\n" + ex.stack);
@@ -413,9 +435,15 @@ function _initDebugging(port) {
   do_print("*******************************************************************");
   do_print("")
 
+  let AuthenticatorType = DebuggerServer.Authenticators.get("PROMPT");
+  let authenticator = new AuthenticatorType.Server();
+  authenticator.allowConnection = () => {
+    return DebuggerServer.AuthenticationResult.ALLOW;
+  };
+
   let listener = DebuggerServer.createListener();
   listener.portOrPath = port;
-  listener.allowConnection = () => true;
+  listener.authenticator = authenticator;
   listener.open();
 
   // spin an event loop until the debugger connects.
@@ -624,8 +652,8 @@ function do_execute_soon(callback, aName) {
           let stack = e.stack ? _format_stack(e.stack) : null;
           _testLogger.testStatus(_TEST_NAME,
                                  funcName,
-                                 'ERROR',
-                                 'OK',
+                                 'FAIL',
+                                 'PASS',
                                  _exception_message(e),
                                  stack);
           _do_quit();

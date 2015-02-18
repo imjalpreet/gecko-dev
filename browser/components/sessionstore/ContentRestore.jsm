@@ -151,8 +151,10 @@ ContentRestoreInternal.prototype = {
     let disallow = new Set(tabData.disallow && tabData.disallow.split(","));
     DocShellCapabilities.restore(this.docShell, disallow);
 
-    if (tabData.storage && this.docShell instanceof Ci.nsIDocShell)
+    if (tabData.storage && this.docShell instanceof Ci.nsIDocShell) {
       SessionStorage.restore(this.docShell, tabData.storage);
+      delete tabData.storage;
+    }
   },
 
   /**
@@ -420,8 +422,8 @@ ProgressListener.prototype = {
   },
 
   onStateChange: function(webProgress, request, stateFlags, status) {
-    if (stateFlags & Ci.nsIWebProgressListener.STATE_STOP &&
-        stateFlags & Ci.nsIWebProgressListener.STATE_IS_NETWORK &&
+    if (webProgress.isTopLevel &&
+        stateFlags & Ci.nsIWebProgressListener.STATE_STOP &&
         stateFlags & Ci.nsIWebProgressListener.STATE_IS_WINDOW) {
       this.callback();
     }

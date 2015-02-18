@@ -16,10 +16,10 @@ namespace mozilla {
 class AppleVTDecoder : public AppleVDADecoder {
 public:
   AppleVTDecoder(const mp4_demuxer::VideoDecoderConfig& aConfig,
-                 MediaTaskQueue* aVideoTaskQueue,
+                 FlushableMediaTaskQueue* aVideoTaskQueue,
                  MediaDataDecoderCallback* aCallback,
                  layers::ImageContainer* aImageContainer);
-  ~AppleVTDecoder();
+  virtual ~AppleVTDecoder();
   virtual nsresult Init() MOZ_OVERRIDE;
   virtual nsresult Input(mp4_demuxer::MP4Sample* aSample) MOZ_OVERRIDE;
   virtual nsresult Flush() MOZ_OVERRIDE;

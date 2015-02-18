@@ -34,17 +34,9 @@ class nsIFile;
 class nsIInputStream;
 class nsIClassInfo;
 
-#define PIFILEIMPL_IID \
-  { 0x218ee173, 0xf44f, 0x4d30, \
-    { 0xab, 0x0c, 0xd6, 0x66, 0xea, 0xc2, 0x84, 0x47 } }
-
-class PIFileImpl : public nsISupports
-{
-public:
-  NS_DECLARE_STATIC_IID_ACCESSOR(PIFILEIMPL_IID)
-};
-
-NS_DEFINE_STATIC_IID_ACCESSOR(PIFileImpl, PIFILEIMPL_IID)
+#define FILEIMPL_IID \
+  { 0xbccb3275, 0x6778, 0x4ac5, \
+    { 0xaf, 0x03, 0x90, 0xed, 0x37, 0xad, 0xdf, 0x5d } }
 
 namespace mozilla {
 namespace dom {
@@ -223,16 +215,17 @@ private:
   // It's thread-safe and not CC-able and it's the only element that is moved
   // between threads.
   // Note: we should not store any other state in this class!
-  const nsRefPtr<FileImpl> mImpl;
+  nsRefPtr<FileImpl> mImpl;
 
   nsCOMPtr<nsISupports> mParent;
 };
 
 // This is the abstract class for any File backend. It must be nsISupports
 // because this class must be ref-counted and it has to work with IPC.
-class FileImpl : public PIFileImpl
+class FileImpl : public nsISupports
 {
 public:
+  NS_DECLARE_STATIC_IID_ACCESSOR(FILEIMPL_IID)
   NS_DECL_THREADSAFE_ISUPPORTS
 
   FileImpl() {}
@@ -242,6 +235,8 @@ public:
   virtual nsresult GetPath(nsAString& aName) = 0;
 
   virtual int64_t GetLastModified(ErrorResult& aRv) = 0;
+
+  virtual void SetLastModified(int64_t aLastModified) = 0;
 
   virtual void GetMozFullPath(nsAString& aName, ErrorResult& aRv) = 0;
 
@@ -293,18 +288,17 @@ public:
 
   virtual bool IsFile() const = 0;
 
-  // These 2 methods are used when the implementation has to CC something.
-  virtual void Unlink() = 0;
-  virtual void Traverse(nsCycleCollectionTraversalCallback &aCb) = 0;
-
-  virtual bool IsCCed() const
+  // True if this implementation can be sent to other threads.
+  virtual bool MayBeClonedToOtherThreads() const
   {
-    return false;
+    return true;
   }
 
 protected:
   virtual ~FileImpl() {}
 };
+
+NS_DEFINE_STATIC_IID_ACCESSOR(FileImpl, FILEIMPL_IID)
 
 class FileImplBase : public FileImpl
 {
@@ -369,6 +363,8 @@ public:
   virtual nsresult GetPath(nsAString& aName) MOZ_OVERRIDE;
 
   virtual int64_t GetLastModified(ErrorResult& aRv) MOZ_OVERRIDE;
+
+  virtual void SetLastModified(int64_t aLastModified) MOZ_OVERRIDE;
 
   virtual void GetMozFullPath(nsAString& aName, ErrorResult& aRv) MOZ_OVERRIDE;
 
@@ -439,7 +435,7 @@ public:
     return mIsFile && mLastModificationDate == UINT64_MAX;
   }
 
-  virtual bool IsFile() const
+  virtual bool IsFile() const MOZ_OVERRIDE
   {
     return mIsFile;
   }
@@ -460,13 +456,10 @@ public:
     return false;
   }
 
-  virtual bool IsSizeUnknown() const
+  virtual bool IsSizeUnknown() const MOZ_OVERRIDE
   {
     return mLength == UINT64_MAX;
   }
-
-  virtual void Unlink() {}
-  virtual void Traverse(nsCycleCollectionTraversalCallback &aCb) {}
 
 protected:
   virtual ~FileImplBase() {}
@@ -749,6 +742,7 @@ public:
   virtual uint64_t GetSize(ErrorResult& aRv) MOZ_OVERRIDE;
   virtual void GetType(nsAString& aType) MOZ_OVERRIDE;
   virtual int64_t GetLastModified(ErrorResult& aRv) MOZ_OVERRIDE;
+  virtual void SetLastModified(int64_t aLastModified) MOZ_OVERRIDE;
   virtual void GetMozFullPathInternal(nsAString& aFullPath,
                                       ErrorResult& aRv) MOZ_OVERRIDE;
   virtual nsresult GetInternalStream(nsIInputStream**) MOZ_OVERRIDE;

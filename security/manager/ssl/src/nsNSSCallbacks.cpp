@@ -86,7 +86,15 @@ nsHTTPDownloadEvent::Run()
   NS_ENSURE_STATE(ios);
 
   nsCOMPtr<nsIChannel> chan;
-  ios->NewChannel(mRequestSession->mURL, nullptr, nullptr, getter_AddRefs(chan));
+  ios->NewChannel2(mRequestSession->mURL,
+                   nullptr,
+                   nullptr,
+                   nullptr, // aLoadingNode
+                   nsContentUtils::GetSystemPrincipal(),
+                   nullptr, // aTriggeringPrincipal
+                   nsILoadInfo::SEC_NORMAL,
+                   nsIContentPolicy::TYPE_OTHER,
+                   getter_AddRefs(chan));
   NS_ENSURE_STATE(chan);
 
   // Security operations scheduled through normal HTTP channels are given
@@ -1288,17 +1296,17 @@ void HandshakeCallback(PRFileDesc* fd, void* client_data) {
   if (equals_previous) {
     PR_LOG(gPIPNSSLog, PR_LOG_DEBUG,
             ("HandshakeCallback using PREV cert %p\n", prevcert.get()));
-    status->mServerCert = prevcert;
+    status->SetServerCert(prevcert, nsNSSCertificate::ev_status_unknown);
   }
   else {
-    if (status->mServerCert) {
+    if (status->HasServerCert()) {
       PR_LOG(gPIPNSSLog, PR_LOG_DEBUG,
-              ("HandshakeCallback KEEPING cert %p\n", status->mServerCert.get()));
+              ("HandshakeCallback KEEPING existing cert\n"));
     }
     else {
       PR_LOG(gPIPNSSLog, PR_LOG_DEBUG,
               ("HandshakeCallback using NEW cert %p\n", nssc.get()));
-      status->mServerCert = nssc;
+      status->SetServerCert(nssc, nsNSSCertificate::ev_status_unknown);
     }
   }
 

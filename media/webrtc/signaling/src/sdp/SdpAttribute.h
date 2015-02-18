@@ -7,6 +7,7 @@
 #ifndef _SDPATTRIBUTE_H_
 #define _SDPATTRIBUTE_H_
 
+#include <algorithm>
 #include <vector>
 #include <ostream>
 #include <sstream>
@@ -426,6 +427,23 @@ public:
     mGroups.push_back(value);
   }
 
+  void
+  RemoveMid(const std::string& mid)
+  {
+    for (auto i = mGroups.begin(); i != mGroups.end();) {
+      auto tag = std::find(i->tags.begin(), i->tags.end(), mid);
+      if (tag != i->tags.end()) {
+        i->tags.erase(tag);
+      }
+
+      if (i->tags.empty()) {
+        i = mGroups.erase(i);
+      } else {
+        ++i;
+      }
+    }
+  }
+
   virtual void Serialize(std::ostream& os) const MOZ_OVERRIDE;
 
   std::vector<Group> mGroups;
@@ -610,6 +628,36 @@ public:
   virtual void Serialize(std::ostream& os) const MOZ_OVERRIDE;
 
   std::vector<Msid> mMsids;
+};
+
+///////////////////////////////////////////////////////////////////////////
+// a=msid-semantic, draft-ietf-mmusic-msid
+//-------------------------------------------------------------------------
+//   msid-semantic-attr = "msid-semantic:" msid-semantic msid-list
+//   msid-semantic = token ; see RFC 4566
+//   msid-list = *(" " msid-id) / " *"
+class SdpMsidSemanticAttributeList : public SdpAttribute
+{
+public:
+  SdpMsidSemanticAttributeList() : SdpAttribute(kMsidSemanticAttribute) {}
+
+  struct MsidSemantic
+  {
+    // TODO: Once we have some more of these, we might want to make an enum
+    std::string semantic;
+    std::vector<std::string> msids;
+  };
+
+  void
+  PushEntry(const std::string& semantic, const std::vector<std::string>& msids)
+  {
+    MsidSemantic value = {semantic, msids};
+    mMsidSemantics.push_back(value);
+  }
+
+  virtual void Serialize(std::ostream& os) const MOZ_OVERRIDE;
+
+  std::vector<MsidSemantic> mMsidSemantics;
 };
 
 ///////////////////////////////////////////////////////////////////////////

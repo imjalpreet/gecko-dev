@@ -26,6 +26,7 @@
 #include "mozilla/Telemetry.h"
 #include "mozilla/net/DashboardTypes.h"
 #include "NullHttpTransaction.h"
+#include "nsIDNSRecord.h"
 #include "nsITransport.h"
 #include "nsISocketTransportService.h"
 #include <algorithm>
@@ -569,6 +570,46 @@ nsHttpConnectionMgr::ClearConnectionHistory()
     return NS_OK;
 }
 
+
+nsHttpConnectionMgr::nsConnectionEntry *
+nsHttpConnectionMgr::LookupPreferredHash(nsHttpConnectionMgr::nsConnectionEntry *ent)
+{
+    nsConnectionEntry *preferred = nullptr;
+    uint32_t len = ent->mCoalescingKeys.Length();
+    for (uint32_t i = 0; !preferred && (i < len); ++i) {
+        preferred = mSpdyPreferredHash.Get(ent->mCoalescingKeys[i]);
+    }
+    return preferred;
+}
+
+void
+nsHttpConnectionMgr::StorePreferredHash(nsHttpConnectionMgr::nsConnectionEntry *ent)
+{
+    if (ent->mCoalescingKeys.IsEmpty()) {
+        return;
+    }
+
+    ent->mInPreferredHash = true;
+    uint32_t len = ent->mCoalescingKeys.Length();
+    for (uint32_t i = 0; i < len; ++i) {
+        mSpdyPreferredHash.Put(ent->mCoalescingKeys[i], ent);
+    }
+}
+
+void
+nsHttpConnectionMgr::RemovePreferredHash(nsHttpConnectionMgr::nsConnectionEntry *ent)
+{
+    if (!ent->mInPreferredHash || ent->mCoalescingKeys.IsEmpty()) {
+        return;
+    }
+
+    ent->mInPreferredHash = false;
+    uint32_t len = ent->mCoalescingKeys.Length();
+    for (uint32_t i = 0; i < len; ++i) {
+        mSpdyPreferredHash.Remove(ent->mCoalescingKeys[i]);
+    }
+}
+
 // Given a nsHttpConnectionInfo find the connection entry object that
 // contains either the nshttpconnection or nshttptransaction parameter.
 // Normally this is done by the hashkey lookup of connectioninfo,
@@ -587,13 +628,13 @@ nsHttpConnectionMgr::LookupConnectionEntry(nsHttpConnectionInfo *ci,
 
     // If there is no sign of coalescing (or it is disabled) then just
     // return the primary hash lookup
-    if (!ent || !ent->mUsingSpdy || ent->mCoalescingKey.IsEmpty())
+    if (!ent || !ent->mUsingSpdy || ent->mCoalescingKeys.IsEmpty())
         return ent;
 
     // If there is no preferred coalescing entry for this host (or the
     // preferred entry is the one that matched the mCT hash lookup) then
     // there is only option
-    nsConnectionEntry *preferred = mSpdyPreferredHash.Get(ent->mCoalescingKey);
+    nsConnectionEntry *preferred = LookupPreferredHash(ent);
     if (!preferred || (preferred == ent))
         return ent;
 
@@ -674,18 +715,15 @@ nsHttpConnectionMgr::ReportSpdyConnection(nsHttpConnection *conn,
     // lookup. Filtering on that has to be done at the time of use
     // rather than the time of registration (i.e. now).
     nsConnectionEntry *joinedConnection;
-    nsConnectionEntry *preferred =
-        mSpdyPreferredHash.Get(ent->mCoalescingKey);
+    nsConnectionEntry *preferred = LookupPreferredHash(ent);
 
-    LOG(("ReportSpdyConnection %s %s ent=%p preferred=%p\n",
-         ent->mConnInfo->Host(), ent->mCoalescingKey.get(),
-         ent, preferred));
+    LOG(("ReportSpdyConnection %p,%s prefers %p,%s\n",
+         ent, ent->mConnInfo->Host(), preferred,
+         preferred ? preferred->mConnInfo->Host() : ""));
 
     if (!preferred) {
-        if (!ent->mCoalescingKey.IsEmpty()) {
-            mSpdyPreferredHash.Put(ent->mCoalescingKey, ent);
-            ent->mSpdyPreferred = true;
-        }
+        // this becomes the preferred entry
+        StorePreferredHash(ent);
     } else if ((preferred != ent) &&
                (joinedConnection = GetSpdyPreferredEnt(ent)) &&
                (joinedConnection != ent)) {
@@ -775,11 +813,11 @@ nsHttpConnectionMgr::GetSpdyPreferredEnt(nsConnectionEntry *aOriginalEntry)
 {
     if (!gHttpHandler->IsSpdyEnabled() ||
         !gHttpHandler->CoalesceSpdy() ||
-        aOriginalEntry->mCoalescingKey.IsEmpty())
+        aOriginalEntry->mCoalescingKeys.IsEmpty()) {
         return nullptr;
+    }
 
-    nsConnectionEntry *preferred =
-        mSpdyPreferredHash.Get(aOriginalEntry->mCoalescingKey);
+    nsConnectionEntry *preferred = LookupPreferredHash(aOriginalEntry);
 
     // if there is no redirection no cert validation is required
     if (preferred == aOriginalEntry)
@@ -807,8 +845,7 @@ nsHttpConnectionMgr::GetSpdyPreferredEnt(nsConnectionEntry *aOriginalEntry)
     if (!activeSpdy) {
         // remove the preferred status of this entry if it cannot be
         // used for pooling.
-        preferred->mSpdyPreferred = false;
-        RemoveSpdyPreferredEnt(preferred->mCoalescingKey);
+        RemovePreferredHash(preferred);
         LOG(("nsHttpConnectionMgr::GetSpdyPreferredConnection "
              "preferred host mapping %s to %s removed due to inactivity.\n",
              aOriginalEntry->mConnInfo->Host(),
@@ -870,15 +907,6 @@ nsHttpConnectionMgr::GetSpdyPreferredEnt(nsConnectionEntry *aOriginalEntry)
          aOriginalEntry->mConnInfo->Host(), preferred->mConnInfo->Host()));
     Telemetry::Accumulate(Telemetry::SPDY_NPN_JOIN, true);
     return preferred;
-}
-
-void
-nsHttpConnectionMgr::RemoveSpdyPreferredEnt(nsACString &aHashKey)
-{
-    if (aHashKey.IsEmpty())
-        return;
-
-    mSpdyPreferredHash.Remove(aHashKey);
 }
 
 //-----------------------------------------------------------------------------
@@ -1500,6 +1528,22 @@ nsHttpConnectionMgr::MakeNewConnection(nsConnectionEntry *ent,
         }
     }
 
+    // consider null transactions that are being used to drive the ssl handshake if
+    // the transaction creating this connection can re-use persistent connections
+    if (trans->Caps() & NS_HTTP_ALLOW_KEEPALIVE) {
+        uint32_t activeLength = ent->mActiveConns.Length();
+        for (uint32_t i = 0; i < activeLength; i++) {
+            nsAHttpTransaction *activeTrans = ent->mActiveConns[i]->Transaction();
+            NullHttpTransaction *nullTrans = activeTrans ? activeTrans->QueryNullTransaction() : nullptr;
+            if (nullTrans && nullTrans->Claim()) {
+                LOG(("nsHttpConnectionMgr::MakeNewConnection [ci = %s] "
+                     "Claiming a null transaction for later use\n",
+                     ent->mConnInfo->HashKey().get()));
+                return NS_OK;
+            }
+        }
+    }
+
     // If this host is trying to negotiate a SPDY session right now,
     // don't create any new connections until the result of the
     // negotiation is known.
@@ -1753,8 +1797,7 @@ nsHttpConnectionMgr::TryDispatchTransaction(nsConnectionEntry *ent,
                 }
             }
         }
-    }
-    else {
+    } else {
         // Mark the transaction and its load group as blocking right now to prevent
         // other transactions from being reordered in the queue due to slow syns.
         trans->DispatchedAsBlocking();
@@ -2378,13 +2421,15 @@ nsHttpConnectionMgr::OnMsgCancelTransaction(int32_t reason, void *param)
     LOG(("nsHttpConnectionMgr::OnMsgCancelTransaction [trans=%p]\n", param));
 
     nsresult closeCode = static_cast<nsresult>(reason);
-    nsHttpTransaction *trans = (nsHttpTransaction *) param;
+    nsRefPtr<nsHttpTransaction> trans =
+        dont_AddRef(static_cast<nsHttpTransaction *>(param));
+
     //
     // if the transaction owns a connection and the transaction is not done,
     // then ask the connection to close the transaction.  otherwise, close the
     // transaction directly (removing it from the pending queue first).
     //
-    nsAHttpConnection *conn = trans->Connection();
+    nsRefPtr<nsAHttpConnection> conn(trans->Connection());
     if (conn && !trans->IsDone()) {
         conn->CloseTransaction(trans, closeCode);
     } else {
@@ -2395,7 +2440,7 @@ nsHttpConnectionMgr::OnMsgCancelTransaction(int32_t reason, void *param)
             int32_t index = ent->mPendingQ.IndexOf(trans);
             if (index >= 0) {
                 LOG(("nsHttpConnectionMgr::OnMsgCancelTransaction [trans=%p]"
-                     " found in pending queue\n", trans));
+                     " found in pending queue\n", trans.get()));
                 ent->mPendingQ.RemoveElementAt(index);
                 nsHttpTransaction *temp = trans;
                 NS_RELEASE(temp); // b/c NS_RELEASE nulls its argument!
@@ -2430,12 +2475,11 @@ nsHttpConnectionMgr::OnMsgCancelTransaction(int32_t reason, void *param)
             if (liveTransaction && liveTransaction->IsNullTransaction()) {
                 LOG(("nsHttpConnectionMgr::OnMsgCancelTransaction [trans=%p] "
                      "also canceling Null Transaction %p on conn %p\n",
-                     trans, liveTransaction, activeConn));
+                     trans.get(), liveTransaction, activeConn));
                 activeConn->CloseTransaction(liveTransaction, closeCode);
             }
         }
     }
-    NS_RELEASE(trans);
 }
 
 void
@@ -2733,8 +2777,7 @@ nsHttpConnectionMgr::OnMsgUpdateParam(int32_t, void *param)
 nsHttpConnectionMgr::nsConnectionEntry::~nsConnectionEntry()
 {
     MOZ_COUNT_DTOR(nsConnectionEntry);
-    if (mSpdyPreferred)
-        gHttpHandler->ConnMgr()->RemoveSpdyPreferredEnt(mCoalescingKey);
+    gHttpHandler->ConnMgr()->RemovePreferredHash(this);
 }
 
 void
@@ -3426,8 +3469,8 @@ nsHalfOpenSocket::OnOutputStreamReady(nsIAsyncOutputStream *out)
 NS_IMETHODIMP
 nsHttpConnectionMgr::nsHalfOpenSocket::OnTransportStatus(nsITransport *trans,
                                                          nsresult status,
-                                                         uint64_t progress,
-                                                         uint64_t progressMax)
+                                                         int64_t progress,
+                                                         int64_t progressMax)
 {
     MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
 
@@ -3453,32 +3496,36 @@ nsHttpConnectionMgr::nsHalfOpenSocket::OnTransportStatus(nsITransport *trans,
     // just completed. We can't do coalescing if using a proxy because the
     // ip addresses are not available to the client.
 
-    if (status == NS_NET_STATUS_CONNECTED_TO &&
+    if (status == NS_NET_STATUS_CONNECTING_TO &&
         gHttpHandler->IsSpdyEnabled() &&
         gHttpHandler->CoalesceSpdy() &&
         mEnt && mEnt->mConnInfo && mEnt->mConnInfo->EndToEndSSL() &&
         !mEnt->mConnInfo->UsingProxy() &&
-        mEnt->mCoalescingKey.IsEmpty()) {
+        mEnt->mCoalescingKeys.IsEmpty()) {
 
-        NetAddr addr;
-        nsresult rv = mSocketTransport->GetPeerAddr(&addr);
-        if (NS_SUCCEEDED(rv)) {
-            mEnt->mCoalescingKey.SetCapacity(kIPv6CStrBufSize + 26);
-            NetAddrToString(&addr, mEnt->mCoalescingKey.BeginWriting(), kIPv6CStrBufSize);
-            mEnt->mCoalescingKey.SetLength(
-                strlen(mEnt->mCoalescingKey.BeginReading()));
+        nsCOMPtr<nsIDNSRecord> dnsRecord(do_GetInterface(mSocketTransport));
+        nsTArray<NetAddr> addressSet;
+        nsresult rv = NS_ERROR_NOT_AVAILABLE;
+        if (dnsRecord) {
+            rv = dnsRecord->GetAddresses(addressSet);
+        }
 
-            if (mEnt->mConnInfo->GetAnonymous())
-                mEnt->mCoalescingKey.AppendLiteral("~A:");
-            else
-                mEnt->mCoalescingKey.AppendLiteral("~.:");
-            mEnt->mCoalescingKey.AppendInt(mEnt->mConnInfo->Port());
-
-            LOG(("nsHttpConnectionMgr::nsHalfOpenSocket::OnTransportStatus "
-                 "STATUS_CONNECTED_TO Established New Coalescing Key for host "
-                 "%s [%s]", mEnt->mConnInfo->Host(),
-                 mEnt->mCoalescingKey.get()));
-
+        if (NS_SUCCEEDED(rv) && !addressSet.IsEmpty()) {
+            for (uint32_t i = 0; i < addressSet.Length(); ++i) {
+                nsCString *newKey = mEnt->mCoalescingKeys.AppendElement(nsCString());
+                newKey->SetCapacity(kIPv6CStrBufSize + 26);
+                NetAddrToString(&addressSet[i], newKey->BeginWriting(), kIPv6CStrBufSize);
+                newKey->SetLength(strlen(newKey->BeginReading()));
+                if (mEnt->mConnInfo->GetAnonymous()) {
+                    newKey->AppendLiteral("~A:");
+                } else {
+                    newKey->AppendLiteral("~.:");
+                }
+                newKey->AppendInt(mEnt->mConnInfo->Port());
+                LOG(("nsHttpConnectionMgr::nsHalfOpenSocket::OnTransportStatus "
+                     "STATUS_CONNECTING_TO Established New Coalescing Key # %d for host "
+                     "%s [%s]", i, mEnt->mConnInfo->Host(), newKey->get()));
+            }
             gHttpHandler->ConnMgr()->ProcessSpdyPendingQ(mEnt);
         }
     }
@@ -3569,7 +3616,7 @@ nsConnectionEntry::nsConnectionEntry(nsHttpConnectionInfo *ci)
     , mSpdyCWND(0)
     , mUsingSpdy(false)
     , mTestedSpdy(false)
-    , mSpdyPreferred(false)
+    , mInPreferredHash(false)
     , mPreferIPv4(false)
     , mPreferIPv6(false)
 {

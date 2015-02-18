@@ -14,29 +14,6 @@
 using namespace js;
 using namespace js::jit;
 
-LDefinition
-LIRGeneratorX86::tempForDispatchCache(MIRType outputType)
-{
-    // x86 doesn't have a scratch register and we need one for the
-    // indirect jump for dispatch-style ICs.
-    //
-    // Note that currently we only install dispatch-style ICs for parallel
-    // execution. If this assumption changes, please change it here.
-    if (gen->info().executionMode() != ParallelExecution)
-        return LDefinition::BogusTemp();
-
-    // If we don't have an output register, we need a temp.
-    if (outputType == MIRType_None)
-        return temp();
-
-    // If we have a double output register, we need a temp.
-    if (outputType == MIRType_Double)
-        return temp();
-
-    // Otherwise we have a non-double output register and we can reuse it.
-    return LDefinition::BogusTemp();
-}
-
 void
 LIRGeneratorX86::useBox(LInstruction *lir, size_t n, MDefinition *mir,
                         LUse::Policy policy, bool useAtStart)
@@ -121,10 +98,19 @@ LIRGeneratorX86::visitBox(MBox *box)
 void
 LIRGeneratorX86::visitUnbox(MUnbox *unbox)
 {
-    // An unbox on x86 reads in a type tag (either in memory or a register) and
-    // a payload. Unlike most instructions conusming a box, we ask for the type
-    // second, so that the result can re-use the first input.
     MDefinition *inner = unbox->getOperand(0);
+
+    if (inner->type() == MIRType_ObjectOrNull) {
+        LUnboxObjectOrNull *lir = new(alloc()) LUnboxObjectOrNull(useRegisterAtStart(inner));
+        if (unbox->fallible())
+            assignSnapshot(lir, unbox->bailoutKind());
+        defineReuseInput(lir, unbox, 0);
+        return;
+    }
+
+    // An unbox on x86 reads in a type tag (either in memory or a register) and
+    // a payload. Unlike most instructions consuming a box, we ask for the type
+    // second, so that the result can re-use the first input.
     MOZ_ASSERT(inner->type() == MIRType_Value);
 
     ensureDefined(inner);
@@ -241,7 +227,7 @@ LIRGeneratorX86::visitAsmJSStoreHeap(MAsmJSStoreHeap *ins)
     if (ptr->isConstant() && !ins->needsBoundsCheck()) {
         MOZ_ASSERT(ptr->toConstant()->value().toInt32() >= 0);
         LAllocation ptrAlloc = LAllocation(ptr->toConstant()->vp());
-        switch (ins->viewType()) {
+        switch (ins->accessType()) {
           case Scalar::Int8: case Scalar::Uint8:
             // See comment below.
             lir = new(alloc()) LAsmJSStoreHeap(ptrAlloc, useFixed(ins->value(), eax));
@@ -261,7 +247,7 @@ LIRGeneratorX86::visitAsmJSStoreHeap(MAsmJSStoreHeap *ins)
         return;
     }
 
-    switch (ins->viewType()) {
+    switch (ins->accessType()) {
       case Scalar::Int8: case Scalar::Uint8:
         // See comment for LIRGeneratorX86::useByteOpRegister.
         lir = new(alloc()) LAsmJSStoreHeap(useRegister(ins->ptr()), useFixed(ins->value(), eax));
@@ -288,7 +274,7 @@ LIRGeneratorX86::visitStoreTypedArrayElementStatic(MStoreTypedArrayElementStatic
     // The code generated for StoreTypedArrayElementStatic is identical to that
     // for AsmJSStoreHeap, and the same concerns apply.
     LStoreTypedArrayElementStatic *lir;
-    switch (ins->viewType()) {
+    switch (ins->accessType()) {
       case Scalar::Int8: case Scalar::Uint8:
       case Scalar::Uint8Clamped:
         lir = new(alloc()) LStoreTypedArrayElementStatic(useRegister(ins->ptr()),

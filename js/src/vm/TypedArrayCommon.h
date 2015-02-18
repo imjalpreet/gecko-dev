@@ -13,6 +13,7 @@
 #include "mozilla/FloatingPoint.h"
 #include "mozilla/PodOperations.h"
 
+#include "js/Conversions.h"
 #include "js/Value.h"
 
 #include "vm/SharedTypedArrayObject.h"
@@ -276,7 +277,7 @@ class ElementSpecific
         // Convert and copy any remaining elements generically.
         RootedValue v(cx);
         for (; i < len; i++) {
-            if (!JSObject::getElement(cx, source, source, i, &v))
+            if (!GetElement(cx, source, source, i, &v))
                 return false;
 
             T n;
@@ -443,9 +444,11 @@ class ElementSpecific
         }
         if (MOZ_UNLIKELY(mozilla::IsNaN(d)))
             return T(0);
+        if (SpecificArray::ArrayTypeID() == Scalar::Uint8Clamped)
+            return T(d);
         if (TypeIsUnsigned<T>())
-            return T(ToUint32(d));
-        return T(ToInt32(d));
+            return T(JS::ToUint32(d));
+        return T(JS::ToInt32(d));
     }
 };
 

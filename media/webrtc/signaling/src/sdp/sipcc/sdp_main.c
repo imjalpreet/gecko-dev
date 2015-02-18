@@ -185,13 +185,15 @@ const sdp_attrarray_t sdp_attr[SDP_MAX_ATTR_TYPES] =
     {"msid", sizeof("msid"),
       sdp_parse_attr_msid, sdp_build_attr_msid},
     {"msid-semantic", sizeof("msid-semantic"),
-      sdp_parse_attr_simple_string, sdp_build_attr_simple_string},
+      sdp_parse_attr_msid_semantic, sdp_build_attr_msid_semantic},
     {"bundle-only", sizeof("bundle-only"),
       sdp_parse_attr_simple_flag, sdp_build_attr_simple_flag},
     {"end-of-candidates", sizeof("end-of-candidates"),
       sdp_parse_attr_simple_flag, sdp_build_attr_simple_flag},
     {"ice-options", sizeof("ice-options"),
       sdp_parse_attr_complete_line, sdp_build_attr_simple_string},
+    {"ssrc", sizeof("ssrc"),
+      sdp_parse_attr_ssrc, sdp_build_attr_ssrc},
 };
 
 /* Note: These *must* be in the same order as the enum types. */

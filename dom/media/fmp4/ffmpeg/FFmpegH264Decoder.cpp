@@ -10,6 +10,7 @@
 #include "ImageContainer.h"
 
 #include "mp4_demuxer/mp4_demuxer.h"
+#include "mp4_demuxer/AnnexB.h"
 
 #include "FFmpegH264Decoder.h"
 
@@ -24,7 +25,7 @@ namespace mozilla
 {
 
 FFmpegH264Decoder<LIBAV_VER>::FFmpegH264Decoder(
-  MediaTaskQueue* aTaskQueue, MediaDataDecoderCallback* aCallback,
+  FlushableMediaTaskQueue* aTaskQueue, MediaDataDecoderCallback* aCallback,
   const mp4_demuxer::VideoDecoderConfig& aConfig,
   ImageContainer* aImageContainer)
   : FFmpegDataDecoder(aTaskQueue, GetCodecId(aConfig.mime_type))
@@ -32,7 +33,6 @@ FFmpegH264Decoder<LIBAV_VER>::FFmpegH264Decoder(
   , mImageContainer(aImageContainer)
 {
   MOZ_COUNT_CTOR(FFmpegH264Decoder);
-  mExtraData.append(aConfig.extra_data.begin(), aConfig.extra_data.length());
 }
 
 nsresult
@@ -53,7 +53,18 @@ FFmpegH264Decoder<LIBAV_VER>::DoDecodeFrame(mp4_demuxer::MP4Sample* aSample)
   AVPacket packet;
   av_init_packet(&packet);
 
-  aSample->Pad(FF_INPUT_BUFFER_PADDING_SIZE);
+  if (!mp4_demuxer::AnnexB::ConvertSampleToAnnexB(aSample)) {
+    NS_WARNING("FFmpeg h264 decoder failed to convert sample to Annex B.");
+    mCallback->Error();
+    return DecodeResult::DECODE_ERROR;
+  }
+
+  if (!aSample->Pad(FF_INPUT_BUFFER_PADDING_SIZE)) {
+    NS_WARNING("FFmpeg h264 decoder failed to allocate sample.");
+    mCallback->Error();
+    return DecodeResult::DECODE_ERROR;
+  }
+
   packet.data = aSample->data;
   packet.size = aSample->size;
   packet.dts = aSample->decode_timestamp;

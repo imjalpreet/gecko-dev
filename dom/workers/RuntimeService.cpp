@@ -35,6 +35,8 @@
 #include "mozilla/dom/MessageEventBinding.h"
 #include "mozilla/dom/WorkerBinding.h"
 #include "mozilla/dom/ScriptSettings.h"
+#include "mozilla/dom/indexedDB/IndexedDatabaseManager.h"
+#include "mozilla/ipc/BackgroundChild.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/dom/Navigator.h"
@@ -71,12 +73,14 @@
 
 using namespace mozilla;
 using namespace mozilla::dom;
+using namespace mozilla::ipc;
 
 USING_WORKERS_NAMESPACE
 
 using mozilla::MutexAutoLock;
 using mozilla::MutexAutoUnlock;
 using mozilla::Preferences;
+using mozilla::dom::indexedDB::IndexedDatabaseManager;
 
 // The size of the worker runtime heaps in bytes. May be changed via pref.
 #define WORKER_DEFAULT_RUNTIME_HEAPSIZE 32 * 1024 * 1024
@@ -396,8 +400,8 @@ UpdateCommonJSGCMemoryOption(RuntimeService* aRuntimeService,
 }
 
 void
-UpdatOtherJSGCMemoryOption(RuntimeService* aRuntimeService,
-                           JSGCParamKey aKey, uint32_t aValue)
+UpdateOtherJSGCMemoryOption(RuntimeService* aRuntimeService,
+                            JSGCParamKey aKey, uint32_t aValue)
 {
   AssertIsOnMainThread();
 
@@ -462,14 +466,14 @@ LoadJSGCMemoryOptions(const char* aPrefName, void* /* aClosure */)
       uint32_t value = (prefValue <= 0 || prefValue >= 0x1000) ?
                        uint32_t(-1) :
                        uint32_t(prefValue) * 1024 * 1024;
-      UpdatOtherJSGCMemoryOption(rts, JSGC_MAX_BYTES, value);
+      UpdateOtherJSGCMemoryOption(rts, JSGC_MAX_BYTES, value);
       continue;
     }
 
     matchName.RebindLiteral(PREF_MEM_OPTIONS_PREFIX "high_water_mark");
     if (memPrefName == matchName || (gRuntimeServiceDuringInit && index == 1)) {
       int32_t prefValue = GetWorkerPref(matchName, 128);
-      UpdatOtherJSGCMemoryOption(rts, JSGC_MAX_MALLOC_BYTES,
+      UpdateOtherJSGCMemoryOption(rts, JSGC_MAX_MALLOC_BYTES,
                                  uint32_t(prefValue) * 1024 * 1024);
       continue;
     }
@@ -534,7 +538,7 @@ LoadJSGCMemoryOptions(const char* aPrefName, void* /* aClosure */)
       int32_t prefValue = GetWorkerPref(matchName, -1);
       uint32_t value =
         (prefValue <= 0 || prefValue >= 100000) ? 0 : uint32_t(prefValue);
-      UpdatOtherJSGCMemoryOption(rts, JSGC_SLICE_TIME_BUDGET, value);
+      UpdateOtherJSGCMemoryOption(rts, JSGC_SLICE_TIME_BUDGET, value);
       continue;
     }
 
@@ -542,7 +546,7 @@ LoadJSGCMemoryOptions(const char* aPrefName, void* /* aClosure */)
     if (memPrefName == matchName ||
         (gRuntimeServiceDuringInit && index == 10)) {
       bool prefValue = GetWorkerPref(matchName, false);
-      UpdatOtherJSGCMemoryOption(rts, JSGC_DYNAMIC_HEAP_GROWTH,
+      UpdateOtherJSGCMemoryOption(rts, JSGC_DYNAMIC_HEAP_GROWTH,
                                  prefValue ? 0 : 1);
       continue;
     }
@@ -551,7 +555,7 @@ LoadJSGCMemoryOptions(const char* aPrefName, void* /* aClosure */)
     if (memPrefName == matchName ||
         (gRuntimeServiceDuringInit && index == 11)) {
       bool prefValue = GetWorkerPref(matchName, false);
-      UpdatOtherJSGCMemoryOption(rts, JSGC_DYNAMIC_MARK_SLICE,
+      UpdateOtherJSGCMemoryOption(rts, JSGC_DYNAMIC_MARK_SLICE,
                                  prefValue ? 0 : 1);
       continue;
     }
@@ -567,6 +571,15 @@ LoadJSGCMemoryOptions(const char* aPrefName, void* /* aClosure */)
     if (memPrefName == matchName ||
         (gRuntimeServiceDuringInit && index == 13)) {
       UpdateCommonJSGCMemoryOption(rts, matchName, JSGC_MAX_EMPTY_CHUNK_COUNT);
+      continue;
+    }
+
+    matchName.RebindLiteral(PREF_MEM_OPTIONS_PREFIX "gc_compacting");
+    if (memPrefName == matchName ||
+        (gRuntimeServiceDuringInit && index == 14)) {
+      bool prefValue = GetWorkerPref(matchName, false);
+      UpdateOtherJSGCMemoryOption(rts, JSGC_COMPACTING_ENABLED,
+                                 prefValue ? 0 : 1);
       continue;
     }
 
@@ -1121,6 +1134,40 @@ PlatformOverrideChanged(const char* /* aPrefName */, void* /* aClosure */)
   }
 }
 
+class BackgroundChildCallback MOZ_FINAL
+  : public nsIIPCBackgroundChildCreateCallback
+{
+public:
+  BackgroundChildCallback()
+  {
+    AssertIsOnMainThread();
+  }
+
+  NS_DECL_ISUPPORTS
+
+private:
+  ~BackgroundChildCallback()
+  {
+    AssertIsOnMainThread();
+  }
+
+  virtual void
+  ActorCreated(PBackgroundChild* aActor) MOZ_OVERRIDE
+  {
+    AssertIsOnMainThread();
+    MOZ_ASSERT(aActor);
+  }
+
+  virtual void
+  ActorFailed() MOZ_OVERRIDE
+  {
+    AssertIsOnMainThread();
+    MOZ_CRASH("Unable to connect PBackground actor for the main thread!");
+  }
+};
+
+NS_IMPL_ISUPPORTS(BackgroundChildCallback, nsIIPCBackgroundChildCreateCallback)
+
 } /* anonymous namespace */
 
 BEGIN_WORKERS_NAMESPACE
@@ -1639,6 +1686,15 @@ RuntimeService::Init()
 
   nsLayoutStatics::AddRef();
 
+  // Make sure PBackground actors are connected as soon as possible for the main
+  // thread in case workers clone remote blobs here.
+  if (!BackgroundChild::GetForCurrentThread()) {
+    nsRefPtr<BackgroundChildCallback> callback = new BackgroundChildCallback();
+    if (!BackgroundChild::GetOrCreateForCurrentThread(callback)) {
+      MOZ_CRASH("Unable to connect PBackground actor for the main thread!");
+    }
+  }
+
   // Initialize JSSettings.
   if (!sDefaultJSSettings.gcSettings[0].IsSet()) {
     sDefaultJSSettings.runtimeOptions = JS::RuntimeOptions();
@@ -1774,6 +1830,10 @@ RuntimeService::Init()
   rv = InitOSFileConstants();
   if (NS_FAILED(rv)) {
     return rv;
+  }
+
+  if (NS_WARN_IF(!IndexedDatabaseManager::GetOrCreate())) {
+    return NS_ERROR_UNEXPECTED;
   }
 
   return NS_OK;
@@ -2152,7 +2212,6 @@ RuntimeService::CreateServiceWorker(const GlobalObject& aGlobal,
     new ServiceWorker(window, sharedWorker);
 
   serviceWorker->mURL = aScriptURL;
-  serviceWorker->mScope = NS_ConvertUTF8toUTF16(aScope);
 
   serviceWorker.forget(aServiceWorker);
   return rv;
@@ -2160,7 +2219,7 @@ RuntimeService::CreateServiceWorker(const GlobalObject& aGlobal,
 
 nsresult
 RuntimeService::CreateServiceWorkerFromLoadInfo(JSContext* aCx,
-                                               WorkerPrivate::LoadInfo aLoadInfo,
+                                               WorkerPrivate::LoadInfo* aLoadInfo,
                                                const nsAString& aScriptURL,
                                                const nsACString& aScope,
                                                ServiceWorker** aServiceWorker)
@@ -2179,7 +2238,6 @@ RuntimeService::CreateServiceWorkerFromLoadInfo(JSContext* aCx,
     new ServiceWorker(nullptr, sharedWorker);
 
   serviceWorker->mURL = aScriptURL;
-  serviceWorker->mScope = NS_ConvertUTF8toUTF16(aScope);
 
   serviceWorker.forget(aServiceWorker);
   return rv;
@@ -2205,21 +2263,21 @@ RuntimeService::CreateSharedWorkerInternal(const GlobalObject& aGlobal,
                                            false, &loadInfo);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  return CreateSharedWorkerFromLoadInfo(cx, loadInfo, aScriptURL, aName, aType,
+  return CreateSharedWorkerFromLoadInfo(cx, &loadInfo, aScriptURL, aName, aType,
                                         aSharedWorker);
 }
 
 nsresult
 RuntimeService::CreateSharedWorkerFromLoadInfo(JSContext* aCx,
-                                               WorkerPrivate::LoadInfo aLoadInfo,
+                                               WorkerPrivate::LoadInfo* aLoadInfo,
                                                const nsAString& aScriptURL,
                                                const nsACString& aName,
                                                WorkerType aType,
                                                SharedWorker** aSharedWorker)
 {
   AssertIsOnMainThread();
-
-  MOZ_ASSERT(aLoadInfo.mResolvedScriptURI);
+  MOZ_ASSERT(aLoadInfo);
+  MOZ_ASSERT(aLoadInfo->mResolvedScriptURI);
 
   nsRefPtr<WorkerPrivate> workerPrivate;
   {
@@ -2229,13 +2287,13 @@ RuntimeService::CreateSharedWorkerFromLoadInfo(JSContext* aCx,
     SharedWorkerInfo* sharedWorkerInfo;
 
     nsCString scriptSpec;
-    nsresult rv = aLoadInfo.mResolvedScriptURI->GetSpec(scriptSpec);
+    nsresult rv = aLoadInfo->mResolvedScriptURI->GetSpec(scriptSpec);
     NS_ENSURE_SUCCESS(rv, rv);
 
     nsAutoCString key;
     GenerateSharedWorkerKey(scriptSpec, aName, key);
 
-    if (mDomainMap.Get(aLoadInfo.mDomain, &domainInfo) &&
+    if (mDomainMap.Get(aLoadInfo->mDomain, &domainInfo) &&
         domainInfo->mSharedWorkerInfos.Get(key, &sharedWorkerInfo)) {
       workerPrivate = sharedWorkerInfo->mWorkerPrivate;
     }
@@ -2245,14 +2303,14 @@ RuntimeService::CreateSharedWorkerFromLoadInfo(JSContext* aCx,
   // a Shared/Service worker and the worker script loads and executes before
   // the SharedWorker object itself is created before then WorkerScriptLoaded()
   // will reset the loadInfo's window.
-  nsCOMPtr<nsPIDOMWindow> window = aLoadInfo.mWindow;
+  nsCOMPtr<nsPIDOMWindow> window = aLoadInfo->mWindow;
 
   bool created = false;
   if (!workerPrivate) {
     ErrorResult rv;
     workerPrivate =
       WorkerPrivate::Constructor(aCx, aScriptURL, false,
-                                 aType, aName, &aLoadInfo, rv);
+                                 aType, aName, aLoadInfo, rv);
     NS_ENSURE_TRUE(workerPrivate, rv.ErrorCode());
 
     created = true;

@@ -8,6 +8,7 @@
 #define mozilla_dom_bluetooth_bluetootheventservice_h__
 
 #include "BluetoothCommon.h"
+#include "BluetoothInterface.h"
 #include "BluetoothProfileManagerBase.h"
 #include "nsAutoPtr.h"
 #include "nsClassHashtable.h"
@@ -306,6 +307,31 @@ public:
   SendInputMessage(const nsAString& aDeviceAddresses,
                    const nsAString& aMessage) = 0;
 
+  /**
+   * Connect to a remote GATT server. (platform specific implementation)
+   */
+  virtual void
+  ConnectGattClientInternal(const nsAString& aAppUuid,
+                            const nsAString& aDeviceAddress,
+                            BluetoothReplyRunnable* aRunnable) = 0;
+
+  /**
+   * Disconnect GATT client from a remote GATT server.
+   * (platform specific implementation)
+   */
+  virtual void
+  DisconnectGattClientInternal(const nsAString& aAppUuid,
+                               const nsAString& aDeviceAddress,
+                               BluetoothReplyRunnable* aRunnable) = 0;
+
+  /**
+   * Unregister a GATT client. (platform specific implementation)
+   */
+  virtual void
+  UnregisterGattClientInternal(int aClientIf,
+                               BluetoothReplyRunnable* aRunnable) = 0;
+
+
   bool
   IsEnabled() const
   {
@@ -394,12 +420,15 @@ protected:
   static BluetoothService*
   Create();
 
-  void CompleteToggleBt(bool aEnabled);
+  void
+  CompleteToggleBt(bool aEnabled);
 
   typedef nsClassHashtable<nsStringHashKey, BluetoothSignalObserverList >
   BluetoothSignalObserverTable;
 
   BluetoothSignalObserverTable mBluetoothSignalObserverTable;
+
+  nsTArray<BluetoothSignal> mPendingPairReqSignals;
 
   bool mEnabled;
 };

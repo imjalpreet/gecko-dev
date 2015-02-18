@@ -21,24 +21,6 @@ let Log = Cu.import("resource://gre/modules/AndroidLog.jsm", {}).AndroidLog.i.bi
 XPCOMUtils.defineLazyGetter(this, "strings",
                             () => Services.strings.createBundle("chrome://browser/locale/browser.properties"));
 
-/**
- * CID of Downloads.jsm's implementation of nsITransfer.
- */
-const kTransferCid = Components.ID("{1b4c85df-cbdd-4bb6-b04e-613caece083c}");
-
-/**
- * Contract ID of the service implementing nsITransfer.
- */
-const kTransferContractId = "@mozilla.org/transfer;1";
-
-// Override Toolkit's nsITransfer implementation with the one from the
-// JavaScript API for downloads.  This will eventually be removed when
-// nsIDownloadManager will not be available anymore (bug 851471).  The
-// old code in this module will be removed in bug 899110.
-Components.manager.QueryInterface(Ci.nsIComponentRegistrar)
-                  .registerFactory(kTransferCid, "",
-                                   kTransferContractId, null);
-
 Object.defineProperty(this, "window",
                       { get: () => Services.wm.getMostRecentWindow("navigator:browser") });
 
@@ -60,39 +42,28 @@ var DownloadNotifications = {
   _notificationKey: "downloads",
 
   init: function () {
-    if (!this._viewAdded) {
-      Downloads.getList(Downloads.ALL)
-               .then(list => list.addView(this))
-               .then(null, Cu.reportError);
+    Downloads.getList(Downloads.ALL)
+             .then(list => list.addView(this))
+             .then(() => this._viewAdded = true, Cu.reportError);
 
-      this._viewAdded = true;
-
-      // All click, cancel, and button presses will be handled by this handler as part of the Notifications callback API.
-      Notifications.registerHandler(this._notificationKey, this);
-    }
-  },
-
-  uninit: function () {
-    if (this._viewAdded) {
-      Downloads.getList(Downloads.ALL)
-               .then(list => list.removeView(this))
-               .then(null, Cu.reportError);
-
-      for (let notification of notifications.values()) {
-        notification.hide();
-      }
-
-      this._viewAdded = false;
-    }
+    // All click, cancel, and button presses will be handled by this handler as part of the Notifications callback API.
+    Notifications.registerHandler(this._notificationKey, this);
   },
 
   onDownloadAdded: function (download) {
+    // Don't create notifications for pre-existing succeeded downloads.
+    // We still add notifications for canceled downloads in case the
+    // user decides to retry the download.
+    if (download.succeeded && !this._viewAdded) {
+      return;
+    }
+
     let notification = new DownloadNotification(download);
     notifications.set(download, notification);
     notification.showOrUpdate();
 
-    // If this is the start of the download, show a toast as well
-    if (download.currentBytes == 0) {
+    // If this is a new download, show a toast as well.
+    if (this._viewAdded) {
       window.NativeWindow.toast.show(strings.GetStringFromName("alertDownloadsToast"), "long");
     }
   },
@@ -154,7 +125,7 @@ var DownloadNotifications = {
         try {
           file.launch();
         } catch (ex) {
-          this.showInAboutDownloads(id, download);
+          this.showInAboutDownloads(download);
         }
       } else {
         ConfirmCancelPrompt.show(download);

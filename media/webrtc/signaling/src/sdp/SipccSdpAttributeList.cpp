@@ -108,8 +108,6 @@ SipccSdpAttributeList::LoadSimpleStrings(sdp_t* sdp, uint16_t level,
                    errorHolder);
   LoadSimpleString(sdp, level, SDP_ATTR_IDENTITY,
                    SdpAttribute::kIdentityAttribute, errorHolder);
-  LoadSimpleString(sdp, level, SDP_ATTR_MSID_SEMANTIC,
-                   SdpAttribute::kMsidSemanticAttribute, errorHolder);
 }
 
 void
@@ -471,6 +469,27 @@ SipccSdpAttributeList::LoadSetup(sdp_t* sdp, uint16_t level)
   MOZ_CRASH("Invalid setup type from sipcc. This is probably corruption.");
 }
 
+void
+SipccSdpAttributeList::LoadSsrc(sdp_t* sdp, uint16_t level)
+{
+  auto ssrcs = MakeUnique<SdpSsrcAttributeList>();
+
+  for (uint16_t i = 1; i < UINT16_MAX; ++i) {
+    sdp_attr_t* attr = sdp_find_attr(sdp, level, 0, SDP_ATTR_SSRC, i);
+
+    if (!attr) {
+      break;
+    }
+
+    sdp_ssrc_t* ssrc = &(attr->attr.ssrc);
+    ssrcs->PushEntry(ssrc->ssrc, ssrc->attribute);
+  }
+
+  if (!ssrcs->mSsrcs.empty()) {
+    SetAttribute(ssrcs.release());
+  }
+}
+
 bool
 SipccSdpAttributeList::LoadGroups(sdp_t* sdp, uint16_t level,
                                   SdpErrorHolder& errorHolder)
@@ -523,6 +542,38 @@ SipccSdpAttributeList::LoadGroups(sdp_t* sdp, uint16_t level,
     SetAttribute(groups.release());
   }
 
+  return true;
+}
+
+bool
+SipccSdpAttributeList::LoadMsidSemantics(sdp_t* sdp, uint16_t level,
+                                         SdpErrorHolder& errorHolder)
+{
+  auto msidSemantics = MakeUnique<SdpMsidSemanticAttributeList>();
+
+  for (uint16_t i = 1; i < UINT16_MAX; ++i) {
+    sdp_attr_t* attr = sdp_find_attr(sdp, level, 0, SDP_ATTR_MSID_SEMANTIC, i);
+
+    if (!attr) {
+      break;
+    }
+
+    sdp_msid_semantic_t* msid_semantic = &(attr->attr.msid_semantic);
+    std::vector<std::string> msids;
+    for (size_t i = 0; i < SDP_MAX_MEDIA_STREAMS; ++i) {
+      if (!msid_semantic->msids[i]) {
+        break;
+      }
+
+      msids.push_back(msid_semantic->msids[i]);
+    }
+
+    msidSemantics->PushEntry(msid_semantic->semantic, msids);
+  }
+
+  if (!msidSemantics->mMsidSemantics.empty()) {
+    SetAttribute(msidSemantics.release());
+  }
   return true;
 }
 
@@ -777,7 +828,11 @@ SipccSdpAttributeList::LoadRtcpFb(sdp_t* sdp, uint16_t level,
     }
 
     std::stringstream osPayloadType;
-    osPayloadType << rtcpfb->payload_num;
+    if (rtcpfb->payload_num == UINT16_MAX) {
+      osPayloadType << "*";
+    } else {
+      osPayloadType << rtcpfb->payload_num;
+    }
 
     std::string pt(osPayloadType.str());
     std::string extra(rtcpfb->extra);
@@ -804,6 +859,10 @@ SipccSdpAttributeList::Load(sdp_t* sdp, uint16_t level,
     if (!LoadGroups(sdp, level, errorHolder)) {
       return false;
     }
+
+    if (!LoadMsidSemantics(sdp, level, errorHolder)) {
+      return false;
+    }
   } else {
     sdp_media_e mtype = sdp_get_media_type(sdp, level);
     if (mtype == SDP_MEDIA_APPLICATION) {
@@ -819,6 +878,7 @@ SipccSdpAttributeList::Load(sdp_t* sdp, uint16_t level,
     LoadFmtp(sdp, level);
     LoadMsids(sdp, level, errorHolder);
     LoadRtcpFb(sdp, level, errorHolder);
+    LoadSsrc(sdp, level);
   }
 
   LoadIceAttributes(sdp, level);
@@ -1019,14 +1079,14 @@ SipccSdpAttributeList::GetMsid() const
   return *static_cast<const SdpMsidAttributeList*>(attr);
 }
 
-const std::string&
+const SdpMsidSemanticAttributeList&
 SipccSdpAttributeList::GetMsidSemantic() const
 {
   if (!HasAttribute(SdpAttribute::kMsidSemanticAttribute)) {
-    return kEmptyString;
+    MOZ_CRASH();
   }
   const SdpAttribute* attr = GetAttribute(SdpAttribute::kMsidSemanticAttribute);
-  return static_cast<const SdpStringAttribute*>(attr)->mValue;
+  return *static_cast<const SdpMsidSemanticAttributeList*>(attr);
 }
 
 uint32_t
@@ -1094,7 +1154,11 @@ SipccSdpAttributeList::GetSetup() const
 const SdpSsrcAttributeList&
 SipccSdpAttributeList::GetSsrc() const
 {
-  MOZ_CRASH("Not yet implemented");
+  if (!HasAttribute(SdpAttribute::kSsrcAttribute)) {
+    MOZ_CRASH();
+  }
+  const SdpAttribute* attr = GetAttribute(SdpAttribute::kSsrcAttribute);
+  return *static_cast<const SdpSsrcAttributeList*>(attr);
 }
 
 const SdpSsrcGroupAttributeList&

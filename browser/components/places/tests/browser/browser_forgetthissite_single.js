@@ -16,11 +16,11 @@ function test() {
     places.push({uri: PlacesUtils._uri(TEST_URI),
                  transition: PlacesUtils.history.TRANSITION_TYPED});
   });
-  addVisits(places, window, function() {
+  PlacesTestUtils.addVisits(places).then(() => {
     testForgetThisSiteVisibility(1, function() {
       testForgetThisSiteVisibility(2, function() {
         // Cleanup
-        waitForClearHistory(finish);
+        PlacesTestUtils.clearHistory().then(finish);
       });
     });
   });

@@ -111,6 +111,8 @@ class LIRGeneratorShared : public MDefinitionVisitor
     inline LAllocation useRegisterOrNonNegativeConstantAtStart(MDefinition *mir);
     inline LAllocation useRegisterOrNonDoubleConstant(MDefinition *mir);
 
+    inline LUse useRegisterForTypedLoad(MDefinition *mir, MIRType type);
+
 #ifdef JS_NUNBOX32
     inline LUse useType(MDefinition *mir, LUse::Policy policy);
     inline LUse usePayload(MDefinition *mir, LUse::Policy policy);
@@ -164,8 +166,11 @@ class LIRGeneratorShared : public MDefinitionVisitor
 
     uint32_t getVirtualRegister() {
         uint32_t vreg = lirGraph_.getVirtualRegister();
-        if (vreg >= MAX_VIRTUAL_REGISTERS) {
-            // Mark code generation as having failed, and return a dummy vreg.
+
+        // If we run out of virtual registers, mark code generation as having
+        // failed and return a dummy vreg. Include a + 1 here for NUNBOX32
+        // platforms that expect Value vregs to be adjacent.
+        if (vreg + 1 >= MAX_VIRTUAL_REGISTERS) {
             gen->abort("max virtual registers");
             return 1;
         }
@@ -192,7 +197,7 @@ class LIRGeneratorShared : public MDefinitionVisitor
     // effects (if any), it may check pre-conditions and bailout if they do not
     // hold. This function informs the register allocator that it will need to
     // capture appropriate state.
-    bool assignSnapshot(LInstruction *ins, BailoutKind kind);
+    void assignSnapshot(LInstruction *ins, BailoutKind kind);
 
     // Marks this instruction as needing to call into either the VM or GC. This
     // function may build a snapshot that captures the result of its own
@@ -210,11 +215,6 @@ class LIRGeneratorShared : public MDefinitionVisitor
 
     // Whether to generate typed array accesses on statically known objects.
     static bool allowStaticTypedArrayAccesses() {
-        return false;
-    }
-
-    // Whether we can inline ForkJoinGetSlice.
-    static bool allowInlineForkJoinGetSlice() {
         return false;
     }
 

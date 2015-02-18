@@ -107,11 +107,11 @@
                           oncommand="BrowserOffline.toggleOfflineStatus();"/>
                 <menuitem id="menu_FileQuitItem"
 #ifdef XP_WIN
-                          label="&quitApplicationCmdWin.label;"
-                          accesskey="&quitApplicationCmdWin.accesskey;"
+                          label="&quitApplicationCmdWin2.label;"
+                          accesskey="&quitApplicationCmdWin2.accesskey;"
 #else
 #ifdef XP_MACOSX
-                          label="&quitApplicationCmdMac.label;"
+                          label="&quitApplicationCmdMac2.label;"
 #else
                           label="&quitApplicationCmd.label;"
                           accesskey="&quitApplicationCmd.accesskey;"
@@ -550,6 +550,7 @@
 #endif
                         command="View:PageInfo"/>
               <menu id="menu_mirrorTabCmd"
+                    hidden="true"
                     accesskey="&mirrorTabCmd.accesskey;"
                     label="&mirrorTabCmd.label;">
                 <menupopup id="menu_mirrorTab-popup"

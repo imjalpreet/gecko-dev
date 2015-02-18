@@ -8,7 +8,6 @@
 #define mozilla_AppleVDADecoder_h
 
 #include "PlatformDecoderModule.h"
-#include "mozilla/RefPtr.h"
 #include "mozilla/ReentrantMonitor.h"
 #include "MP4Reader.h"
 #include "MP4Decoder.h"
@@ -19,7 +18,7 @@
 
 namespace mozilla {
 
-class MediaTaskQueue;
+class FlushableMediaTaskQueue;
 class MediaDataDecoderCallback;
 namespace layers {
   class ImageContainer;
@@ -62,15 +61,15 @@ public:
   // not supported by current configuration.
   static already_AddRefed<AppleVDADecoder> CreateVDADecoder(
     const mp4_demuxer::VideoDecoderConfig& aConfig,
-    MediaTaskQueue* aVideoTaskQueue,
+    FlushableMediaTaskQueue* aVideoTaskQueue,
     MediaDataDecoderCallback* aCallback,
     layers::ImageContainer* aImageContainer);
 
   AppleVDADecoder(const mp4_demuxer::VideoDecoderConfig& aConfig,
-                  MediaTaskQueue* aVideoTaskQueue,
+                  FlushableMediaTaskQueue* aVideoTaskQueue,
                   MediaDataDecoderCallback* aCallback,
                   layers::ImageContainer* aImageContainer);
-  ~AppleVDADecoder();
+  virtual ~AppleVDADecoder();
   virtual nsresult Init() MOZ_OVERRIDE;
   virtual nsresult Input(mp4_demuxer::MP4Sample* aSample) MOZ_OVERRIDE;
   virtual nsresult Flush() MOZ_OVERRIDE;
@@ -87,10 +86,13 @@ public:
   CFDictionaryRef CreateOutputConfiguration();
 
   const mp4_demuxer::VideoDecoderConfig& mConfig;
-  RefPtr<MediaTaskQueue> mTaskQueue;
+  nsRefPtr<FlushableMediaTaskQueue> mTaskQueue;
   MediaDataDecoderCallback* mCallback;
-  layers::ImageContainer* mImageContainer;
+  nsRefPtr<layers::ImageContainer> mImageContainer;
   ReorderQueue mReorderQueue;
+  uint32_t mPictureWidth;
+  uint32_t mPictureHeight;
+  uint32_t mMaxRefFrames;
 
 private:
   VDADecoder mDecoder;

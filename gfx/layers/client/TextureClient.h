@@ -89,9 +89,9 @@ public:
 
   static TemporaryRef<SyncObject> CreateSyncObject(SyncHandle aHandle);
 
-  MOZ_BEGIN_NESTED_ENUM_CLASS(SyncType)
+  enum class SyncType {
     D3D11,
-  MOZ_END_NESTED_ENUM_CLASS(SyncType)
+  };
 
   virtual SyncType GetSyncType() = 0;
   virtual void FinalizeFrame() = 0;
@@ -173,7 +173,8 @@ class TextureClient
   : public AtomicRefCountedWithFinalize<TextureClient>
 {
 public:
-  explicit TextureClient(TextureFlags aFlags = TextureFlags::DEFAULT);
+  explicit TextureClient(ISurfaceAllocator* aAllocator,
+                         TextureFlags aFlags = TextureFlags::DEFAULT);
   virtual ~TextureClient();
 
   // Creates and allocates a TextureClient usable with Moz2D.
@@ -280,6 +281,20 @@ public:
   {
     return gfx::SurfaceFormat::UNKNOWN;
   }
+
+  /**
+   * This method is strictly for debugging. It causes locking and
+   * needless copies.
+   */
+  virtual TemporaryRef<gfx::DataSourceSurface> GetAsSurface() {
+    Lock(OpenMode::OPEN_READ);
+    RefPtr<gfx::SourceSurface> surf = BorrowDrawTarget()->Snapshot();
+    RefPtr<gfx::DataSourceSurface> data = surf->GetDataSurface();
+    Unlock();
+    return data;
+  }
+
+  virtual void PrintInfo(std::stringstream& aStream, const char* aPrefix);
 
   /**
    * Copies a rectangle from this texture client to a position in aTarget.
@@ -411,8 +426,10 @@ public:
    * If the texture flags contain TextureFlags::DEALLOCATE_CLIENT, the destruction
    * will be synchronously coordinated with the compositor side, otherwise it
    * will be done asynchronously.
+   * If sync is true, the destruction will be synchronous regardless of the
+   * texture's flags (bad for performance, use with care).
    */
-  void ForceRemove();
+  void ForceRemove(bool sync = false);
 
   virtual void SetReleaseFenceHandle(FenceHandle aReleaseFenceHandle)
   {
@@ -442,7 +459,7 @@ public:
   /**
    * This function waits until the buffer is no longer being used.
    */
-  virtual void WaitForBufferOwnership() {}
+  virtual void WaitForBufferOwnership(bool aWaitReleaseFence = true) {}
 
   /**
    * Track how much of this texture is wasted.
@@ -553,11 +570,11 @@ public:
 
   virtual ~BufferTextureClient();
 
-  virtual bool IsAllocated() const = 0;
+  virtual bool IsAllocated() const MOZ_OVERRIDE = 0;
 
   virtual uint8_t* GetBuffer() const = 0;
 
-  virtual gfx::IntSize GetSize() const { return mSize; }
+  virtual gfx::IntSize GetSize() const MOZ_OVERRIDE { return mSize; }
 
   virtual bool Lock(OpenMode aMode) MOZ_OVERRIDE;
 
@@ -596,15 +613,12 @@ public:
 
   virtual bool HasInternalBuffer() const MOZ_OVERRIDE { return true; }
 
-  ISurfaceAllocator* GetAllocator() const;
-
   virtual TemporaryRef<TextureClient>
   CreateSimilar(TextureFlags aFlags = TextureFlags::DEFAULT,
                 TextureAllocationFlags aAllocFlags = ALLOC_DEFAULT) const MOZ_OVERRIDE;
 
 protected:
   RefPtr<gfx::DrawTarget> mDrawTarget;
-  RefPtr<ISurfaceAllocator> mAllocator;
   gfx::SurfaceFormat mFormat;
   gfx::IntSize mSize;
   gfx::BackendType mBackend;
@@ -683,7 +697,8 @@ protected:
 class SharedSurfaceTextureClient : public TextureClient
 {
 public:
-  SharedSurfaceTextureClient(TextureFlags aFlags, gl::SharedSurface* surf);
+  SharedSurfaceTextureClient(ISurfaceAllocator* aAllocator, TextureFlags aFlags,
+                             gl::SharedSurface* surf);
 
 protected:
   ~SharedSurfaceTextureClient();

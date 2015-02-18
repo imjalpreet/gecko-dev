@@ -229,11 +229,10 @@ enum offerAnswerFlags
 
 enum mediaPipelineFlags
 {
-  PIPELINE_LOCAL = (1<<0),
-  PIPELINE_RTCP_MUX = (1<<1),
-  PIPELINE_SEND = (1<<2),
-  PIPELINE_VIDEO = (1<<3),
-  PIPELINE_RTCP_NACK = (1<<4)
+  PIPELINE_RTCP_MUX = (1<<0),
+  PIPELINE_SEND = (1<<1),
+  PIPELINE_VIDEO = (1<<2),
+  PIPELINE_RTCP_NACK = (1<<3)
 };
 
 
@@ -270,25 +269,26 @@ public:
   }
 
   NS_DECL_THREADSAFE_ISUPPORTS
-  NS_IMETHODIMP OnCreateOfferSuccess(const char* offer, ER&);
-  NS_IMETHODIMP OnCreateOfferError(uint32_t code, const char *msg, ER&);
-  NS_IMETHODIMP OnCreateAnswerSuccess(const char* answer, ER&);
-  NS_IMETHODIMP OnCreateAnswerError(uint32_t code, const char *msg, ER&);
-  NS_IMETHODIMP OnSetLocalDescriptionSuccess(ER&);
-  NS_IMETHODIMP OnSetRemoteDescriptionSuccess(ER&);
-  NS_IMETHODIMP OnSetLocalDescriptionError(uint32_t code, const char *msg, ER&);
-  NS_IMETHODIMP OnSetRemoteDescriptionError(uint32_t code, const char *msg, ER&);
-  NS_IMETHODIMP NotifyDataChannel(nsIDOMDataChannel *channel, ER&);
-  NS_IMETHODIMP OnStateChange(PCObserverStateType state_type, ER&, void*);
-  NS_IMETHODIMP OnAddStream(DOMMediaStream *stream, ER&);
-  NS_IMETHODIMP OnRemoveStream(ER&);
-  NS_IMETHODIMP OnAddTrack(ER&);
-  NS_IMETHODIMP OnRemoveTrack(ER&);
-  NS_IMETHODIMP OnReplaceTrackSuccess(ER&);
-  NS_IMETHODIMP OnReplaceTrackError(uint32_t code, const char *msg, ER&);
-  NS_IMETHODIMP OnAddIceCandidateSuccess(ER&);
-  NS_IMETHODIMP OnAddIceCandidateError(uint32_t code, const char *msg, ER&);
-  NS_IMETHODIMP OnIceCandidate(uint16_t level, const char *mid, const char *cand, ER&);
+  NS_IMETHOD OnCreateOfferSuccess(const char* offer, ER&) MOZ_OVERRIDE;
+  NS_IMETHOD OnCreateOfferError(uint32_t code, const char *msg, ER&) MOZ_OVERRIDE;
+  NS_IMETHOD OnCreateAnswerSuccess(const char* answer, ER&) MOZ_OVERRIDE;
+  NS_IMETHOD OnCreateAnswerError(uint32_t code, const char *msg, ER&) MOZ_OVERRIDE;
+  NS_IMETHOD OnSetLocalDescriptionSuccess(ER&) MOZ_OVERRIDE;
+  NS_IMETHOD OnSetRemoteDescriptionSuccess(ER&) MOZ_OVERRIDE;
+  NS_IMETHOD OnSetLocalDescriptionError(uint32_t code, const char *msg, ER&) MOZ_OVERRIDE;
+  NS_IMETHOD OnSetRemoteDescriptionError(uint32_t code, const char *msg, ER&) MOZ_OVERRIDE;
+  NS_IMETHOD NotifyDataChannel(nsIDOMDataChannel *channel, ER&) MOZ_OVERRIDE;
+  NS_IMETHOD OnStateChange(PCObserverStateType state_type, ER&, void*) MOZ_OVERRIDE;
+  NS_IMETHOD OnAddStream(DOMMediaStream &stream, ER&) MOZ_OVERRIDE;
+  NS_IMETHOD OnRemoveStream(DOMMediaStream &stream, ER&) MOZ_OVERRIDE;
+  NS_IMETHOD OnAddTrack(MediaStreamTrack &track, ER&) MOZ_OVERRIDE;
+  NS_IMETHOD OnRemoveTrack(MediaStreamTrack &track, ER&) MOZ_OVERRIDE;
+  NS_IMETHOD OnReplaceTrackSuccess(ER&) MOZ_OVERRIDE;
+  NS_IMETHOD OnReplaceTrackError(uint32_t code, const char *msg, ER&) MOZ_OVERRIDE;
+  NS_IMETHOD OnAddIceCandidateSuccess(ER&) MOZ_OVERRIDE;
+  NS_IMETHOD OnAddIceCandidateError(uint32_t code, const char *msg, ER&) MOZ_OVERRIDE;
+  NS_IMETHOD OnIceCandidate(uint16_t level, const char *mid, const char *cand, ER&) MOZ_OVERRIDE;
+  NS_IMETHODIMP OnNegotiationNeeded(ER&);
 
   // Hack because add_ice_candidates can happen asynchronously with respect
   // to the API calls. The whole test suite needs a refactor.
@@ -439,21 +439,19 @@ TestObserver::OnStateChange(PCObserverStateType state_type, ER&, void*)
 
 
 NS_IMETHODIMP
-TestObserver::OnAddStream(DOMMediaStream *stream, ER&)
+TestObserver::OnAddStream(DOMMediaStream &stream, ER&)
 {
-  PR_ASSERT(stream);
-
-  std::cout << name << ": OnAddStream called hints=" << stream->GetHintContents()
+  std::cout << name << ": OnAddStream called hints=" << stream.GetHintContents()
             << " thread=" << PR_GetCurrentThread() << std::endl ;
 
   onAddStreamCalled = true;
 
-  streams.push_back(stream);
+  streams.push_back(&stream);
 
   // We know that the media stream is secretly a Fake_SourceMediaStream,
   // so now we can start it pulling from us
   nsRefPtr<Fake_SourceMediaStream> fs =
-    static_cast<Fake_SourceMediaStream *>(stream->GetStream());
+    static_cast<Fake_SourceMediaStream *>(stream.GetStream());
 
   test_utils->sts_target()->Dispatch(
     WrapRunnable(fs, &Fake_SourceMediaStream::Start),
@@ -463,21 +461,21 @@ TestObserver::OnAddStream(DOMMediaStream *stream, ER&)
 }
 
 NS_IMETHODIMP
-TestObserver::OnRemoveStream(ER&)
+TestObserver::OnRemoveStream(DOMMediaStream &stream, ER&)
 {
   state = stateSuccess;
   return NS_OK;
 }
 
 NS_IMETHODIMP
-TestObserver::OnAddTrack(ER&)
+TestObserver::OnAddTrack(MediaStreamTrack &track, ER&)
 {
   state = stateSuccess;
   return NS_OK;
 }
 
 NS_IMETHODIMP
-TestObserver::OnRemoveTrack(ER&)
+TestObserver::OnRemoveTrack(MediaStreamTrack &track, ER&)
 {
   state = stateSuccess;
   return NS_OK;
@@ -649,7 +647,11 @@ class ParsedSDP {
     std::string sdp;
 
     for (auto it = sdp_lines_.begin(); it != sdp_lines_.end(); ++it) {
-      sdp += it->first + ' ' + it->second;
+      sdp += it->first;
+      if (it->second != "\r\n") {
+        sdp += " ";
+      }
+      sdp += it->second;
     }
 
     return sdp;
@@ -930,7 +932,8 @@ class SignalingAgent {
     const std::string stun_addr = g_stun_server_address,
     uint16_t stun_port = g_stun_server_port) :
     pc(nullptr),
-    name(aName) {
+    name(aName),
+    mBundleEnabled(true) {
     cfg_.addStunServer(stun_addr, stun_port);
 
     PeerConnectionImpl *pcImpl =
@@ -958,6 +961,11 @@ class SignalingAgent {
   {
     mozilla::SyncRunnable::DispatchToThread(gMainThread,
       WrapRunnable(this, &SignalingAgent::Init_m));
+  }
+
+  void SetBundleEnabled(bool enabled)
+  {
+    mBundleEnabled = enabled;
   }
 
   void WaitForGather() {
@@ -1057,6 +1065,12 @@ class SignalingAgent {
     return result;
   }
 
+  std::string RemoveBundle(const std::string& sdp) const {
+    ParsedSDP parsed(sdp);
+    parsed.DeleteLines("a=group:BUNDLE");
+    return parsed.getSdp();
+  }
+
   // Adds a stream to the PeerConnection.
   void AddStream(uint32_t hint =
          DOMMediaStream::HINT_CONTENTS_AUDIO |
@@ -1071,18 +1085,34 @@ class SignalingAgent {
     for (uint32_t i = 0; i < tracks.Length(); i++) {
       ASSERT_EQ(pc->AddTrack(tracks[i], domMediaStream), NS_OK);
     }
-    domMediaStream_ = domMediaStream;
+    domMediaStreams_.push_back(domMediaStream);
   }
 
-  // Removes a stream from the PeerConnection. If the stream
-  // parameter is absent, removes the stream that was most
-  // recently added to the PeerConnection.
-  void RemoveLastStreamAdded() {
+  void RemoveTrack(size_t streamIndex, bool videoTrack = false)
+  {
+    ASSERT_LT(streamIndex, domMediaStreams_.size());
     nsTArray<nsRefPtr<MediaStreamTrack>> tracks;
-    domMediaStream_->GetTracks(tracks);
+    domMediaStreams_[streamIndex]->GetTracks(tracks);
+    for (size_t i = 0; i < tracks.Length(); ++i) {
+      if (!!tracks[i]->AsVideoStreamTrack() == videoTrack) {
+        ASSERT_EQ(pc->RemoveTrack(tracks[i]), NS_OK);
+      }
+    }
+  }
+
+  void RemoveStream(size_t index) {
+    nsTArray<nsRefPtr<MediaStreamTrack>> tracks;
+    domMediaStreams_[index]->GetTracks(tracks);
     for (uint32_t i = 0; i < tracks.Length(); i++) {
       ASSERT_EQ(pc->RemoveTrack(tracks[i]), NS_OK);
     }
+    domMediaStreams_.erase(domMediaStreams_.begin() + index);
+  }
+
+  // Removes the stream that was most recently added to the PeerConnection.
+  void RemoveLastStreamAdded() {
+    ASSERT_FALSE(domMediaStreams_.empty());
+    RemoveStream(domMediaStreams_.size() - 1);
   }
 
   void CreateOffer(OfferOptions& options,
@@ -1113,10 +1143,14 @@ class SignalingAgent {
     // Now call CreateOffer as JS would
     pObserver->state = TestObserver::stateNoResponse;
     ASSERT_EQ(pc->CreateOffer(options), NS_OK);
+
     ASSERT_EQ(pObserver->state, TestObserver::stateSuccess);
     SDPSanityCheck(pObserver->lastString, sdpCheck, true);
     ASSERT_EQ(signaling_state(), endState);
     offer_ = pObserver->lastString;
+    if (!mBundleEnabled) {
+      offer_ = RemoveBundle(offer_);
+    }
   }
 
   // sets the offer to match the local description
@@ -1124,6 +1158,9 @@ class SignalingAgent {
   void UpdateOffer(uint32_t sdpCheck) {
     offer_ = getLocalDescription();
     SDPSanityCheck(offer_, sdpCheck, true);
+    if (!mBundleEnabled) {
+      offer_ = RemoveBundle(offer_);
+    }
   }
 
   void CreateAnswer(uint32_t offerAnswerFlags,
@@ -1132,6 +1169,16 @@ class SignalingAgent {
                                         DONT_CHECK_DATA,
                     PCImplSignalingState endState =
                     PCImplSignalingState::SignalingHaveRemoteOffer) {
+    // Create a media stream as if it came from GUM
+    Fake_AudioStreamSource *audio_stream =
+      new Fake_AudioStreamSource();
+
+    nsresult ret;
+    mozilla::SyncRunnable::DispatchToThread(
+      test_utils->sts_target(),
+      WrapRunnableRet(audio_stream, &Fake_MediaStream::Start, &ret));
+
+    ASSERT_TRUE(NS_SUCCEEDED(ret));
 
     uint32_t aHintContents = 0;
     if (offerAnswerFlags & ANSWER_AUDIO) {
@@ -1140,7 +1187,7 @@ class SignalingAgent {
     if (offerAnswerFlags & ANSWER_VIDEO) {
       aHintContents |= DOMMediaStream::HINT_CONTENTS_VIDEO;
     }
-    AddStream(aHintContents);
+    AddStream(aHintContents, audio_stream);
 
     // Decide if streams are disabled for offer or answer
     // then perform SDP checking based on which stream disabled
@@ -1151,6 +1198,9 @@ class SignalingAgent {
     ASSERT_EQ(signaling_state(), endState);
 
     answer_ = pObserver->lastString;
+    if (!mBundleEnabled) {
+      answer_ = RemoveBundle(answer_);
+    }
   }
 
   // sets the answer to match the local description
@@ -1158,23 +1208,16 @@ class SignalingAgent {
   void UpdateAnswer(uint32_t sdpCheck) {
     answer_ = getLocalDescription();
     SDPSanityCheck(answer_, sdpCheck, false);
+    if (!mBundleEnabled) {
+      answer_ = RemoveBundle(answer_);
+    }
   }
 
-  // At present, we use the hints field in a stream to find and
-  // remove it. This only works if the specified hints flags are
-  // unique among all streams in the PeerConnection. This is not
-  // generally true, and will need significant revision once
-  // multiple streams are supported.
-  void CreateOfferRemoveStream(OfferOptions& options,
-                               uint32_t hints, uint32_t sdpCheck) {
+  void CreateOfferRemoveTrack(OfferOptions& options,
+                              bool videoTrack,
+                              uint32_t sdpCheck) {
 
-    domMediaStream_->SetHintContents(hints);
-
-    // This currently "removes" a stream that has the same audio/video
-    // hints as were passed in.
-    // When complete RemoveStream will remove and entire stream and its tracks
-    // not just disable a track as this is currently doing
-    RemoveLastStreamAdded();
+    RemoveTrack(0, videoTrack);
 
     // Now call CreateOffer as JS would
     pObserver->state = TestObserver::stateNoResponse;
@@ -1182,6 +1225,9 @@ class SignalingAgent {
     ASSERT_TRUE(pObserver->state == TestObserver::stateSuccess);
     SDPSanityCheck(pObserver->lastString, sdpCheck, true);
     offer_ = pObserver->lastString;
+    if (!mBundleEnabled) {
+      offer_ = RemoveBundle(offer_);
+    }
   }
 
   void SetRemote(TestObserver::Action action, const std::string& remote,
@@ -1267,26 +1313,33 @@ class SignalingAgent {
     ASSERT_EQ(signaling_state(), endState);
   }
 
-  int GetPacketsReceived(int stream) {
+  int GetPacketsReceived(size_t stream) {
     std::vector<DOMMediaStream *> streams = pObserver->GetStreams();
 
-    if ((int) streams.size() <= stream) {
+    if (streams.size() <= stream) {
+      EXPECT_TRUE(false);
       return 0;
     }
 
     return streams[stream]->GetStream()->AsSourceStream()->GetSegmentsAdded();
   }
 
-  int GetPacketsSent(int stream) {
+  int GetPacketsSent(size_t stream) {
+    if (stream >= domMediaStreams_.size()) {
+      EXPECT_TRUE(false);
+      return 0;
+    }
+
     return static_cast<Fake_MediaStreamBase *>(
-        domMediaStream_->GetStream())->GetSegmentsAdded();
+        domMediaStreams_[stream]->GetStream())->GetSegmentsAdded();
   }
 
   //Stops generating new audio data for transmission.
   //Should be called before Cleanup of the peer connection.
   void CloseSendStreams() {
-    static_cast<Fake_MediaStream*>(
-        domMediaStream_->GetStream())->StopStream();
+    for (auto i = domMediaStreams_.begin(); i != domMediaStreams_.end(); ++i) {
+      static_cast<Fake_MediaStream*>((*i)->GetStream())->StopStream();
+    }
   }
 
   //Stops pulling audio data off the receivers.
@@ -1299,8 +1352,14 @@ class SignalingAgent {
     }
   }
 
+  // Right now we have no convenient way for this unit-test to learn the track
+  // ids of the tracks, so they can be queried later. We could either expose
+  // the JsepSessionImpl in some way, or we could parse the identifiers out of
+  // the SDP. For now, we just specify audio/video, since a given DOMMediaStream
+  // can have only one of each anyway. Once this is fixed, we will need to
+  // pass a real track id if we want to test that case.
   mozilla::RefPtr<mozilla::MediaPipeline> GetMediaPipeline(
-    bool local, size_t stream, int track) {
+    bool local, size_t stream, bool video) {
     SourceStreamInfo* streamInfo;
     if (local) {
       mozilla::SyncRunnable::DispatchToThread(
@@ -1320,26 +1379,30 @@ class SignalingAgent {
 
     const auto &pipelines = streamInfo->GetPipelines();
 
-    auto it = pipelines.find(track);
-    return (it == pipelines.end())? nullptr : it->second;
+    for (auto i = pipelines.begin(); i != pipelines.end(); ++i) {
+      if (i->second->IsVideo() == video) {
+        std::cout << "Got MediaPipeline " << i->second->trackid();
+        return i->second;
+      }
+    }
+    return nullptr;
   }
 
-  void CheckMediaPipeline(int stream, int track, uint32_t flags,
+  void CheckMediaPipeline(int stream, bool video, uint32_t flags,
     VideoSessionConduit::FrameRequestType frameRequestMethod =
       VideoSessionConduit::FrameRequestNone) {
 
     std::cout << name << ": Checking media pipeline settings for "
-              << ((flags & PIPELINE_LOCAL) ? "local " : "remote ")
               << ((flags & PIPELINE_SEND) ? "sending " : "receiving ")
               << ((flags & PIPELINE_VIDEO) ? "video" : "audio")
               << " pipeline (stream " << stream
-              << ", track " << track << "); expect "
+              << ", track " << video << "); expect "
               << ((flags & PIPELINE_RTCP_MUX) ? "MUX, " : "no MUX, ")
               << ((flags & PIPELINE_RTCP_NACK) ? "NACK." : "no NACK.")
               << std::endl;
 
     mozilla::RefPtr<mozilla::MediaPipeline> pipeline =
-      GetMediaPipeline((flags & PIPELINE_LOCAL), stream, track);
+      GetMediaPipeline((flags & PIPELINE_SEND), stream, video);
     ASSERT_TRUE(pipeline);
     ASSERT_EQ(pipeline->IsDoingRtcpMux(), !!(flags & PIPELINE_RTCP_MUX));
     // We cannot yet test send/recv with video.
@@ -1361,7 +1424,7 @@ class SignalingAgent {
 
 
     // Check feedback method for video
-    if (flags & PIPELINE_VIDEO) {
+    if ((flags & PIPELINE_VIDEO) && !(flags & PIPELINE_SEND)) {
         mozilla::MediaSessionConduit *conduit = pipeline->Conduit();
         ASSERT_TRUE(conduit);
         ASSERT_EQ(conduit->type(), mozilla::MediaSessionConduit::VIDEO);
@@ -1382,9 +1445,10 @@ public:
   nsRefPtr<TestObserver> pObserver;
   std::string offer_;
   std::string answer_;
-  nsRefPtr<DOMMediaStream> domMediaStream_;
+  std::vector<nsRefPtr<DOMMediaStream>> domMediaStreams_;
   IceConfiguration cfg_;
   const std::string name;
+  bool mBundleEnabled;
 
   typedef struct {
     std::string candidate;
@@ -1617,6 +1681,12 @@ TestObserver::OnIceCandidate(uint16_t level,
   return NS_OK;
 }
 
+NS_IMETHODIMP
+TestObserver::OnNegotiationNeeded(ER&)
+{
+  return NS_OK;
+}
+
 class SignalingEnvironment : public ::testing::Environment {
  public:
   void TearDown() {
@@ -1665,7 +1735,9 @@ class SignalingAgentTest : public ::testing::Test {
 };
 
 
-class SignalingTest : public ::testing::Test {
+class SignalingTest : public ::testing::Test,
+                      public ::testing::WithParamInterface<std::string>
+{
 public:
   SignalingTest()
       : init_(false),
@@ -1704,6 +1776,11 @@ public:
     a2_ = new SignalingAgent(calleeName, stun_addr_, stun_port_);
     a1_->Init();
     a2_->Init();
+    if (GetParam() == "no_bundle") {
+      a1_->SetBundleEnabled(false);
+    } else if(GetParam() == "reject_bundle") {
+      a2_->SetBundleEnabled(false);
+    }
 
     a1_->SetPeer(a2_.get());
     a2_->SetPeer(a1_.get());
@@ -1793,14 +1870,14 @@ public:
     WaitForCompleted();
   }
 
-  void CreateOfferRemoveStream(OfferOptions& options,
-                               uint32_t hints, uint32_t sdpCheck) {
+  void CreateOfferRemoveTrack(OfferOptions& options,
+                              bool videoTrack, uint32_t sdpCheck) {
     EnsureInit();
     OfferOptions aoptions;
     aoptions.setInt32Option("OfferToReceiveAudio", 1);
     aoptions.setInt32Option("OfferToReceiveVideo", 1);
     a1_->CreateOffer(aoptions, OFFER_AV, SHOULD_SENDRECV_AV );
-    a1_->CreateOfferRemoveStream(options, hints, sdpCheck);
+    a1_->CreateOfferRemoveTrack(options, videoTrack, sdpCheck);
   }
 
   void CreateOfferAudioOnly(OfferOptions& options,
@@ -1821,6 +1898,37 @@ public:
                             unsigned short level) {
     EnsureInit();
     a1_->AddIceCandidate(candidate, mid, level, false);
+  }
+
+  std::string SwapMsids(const std::string& sdp, bool swapVideo) const
+  {
+    SipccSdpParser parser;
+    UniquePtr<Sdp> parsed = parser.Parse(sdp);
+
+    SdpMediaSection* previousMsection = nullptr;
+    bool swapped = false;
+    for (size_t i = 0; i < parsed->GetMediaSectionCount(); ++i) {
+      SdpMediaSection* currentMsection = &parsed->GetMediaSection(i);
+      bool isVideo = currentMsection->GetMediaType() == SdpMediaSection::kVideo;
+      if (swapVideo == isVideo) {
+        if (previousMsection) {
+          UniquePtr<SdpMsidAttributeList> prevMsid(
+            new SdpMsidAttributeList(
+                previousMsection->GetAttributeList().GetMsid()));
+          UniquePtr<SdpMsidAttributeList> currMsid(
+            new SdpMsidAttributeList(
+                currentMsection->GetAttributeList().GetMsid()));
+          previousMsection->GetAttributeList().SetAttribute(currMsid.release());
+          currentMsection->GetAttributeList().SetAttribute(prevMsid.release());
+          swapped = true;
+        }
+        previousMsection = currentMsection;
+      }
+    }
+
+    EXPECT_TRUE(swapped);
+
+    return parsed->ToString();
   }
 
   void CheckRtcpFbSdp(const std::string &sdp,
@@ -1896,21 +2004,17 @@ public:
 
     WaitForCompleted();
 
-    a1_->CloseSendStreams();
-    a1_->CloseReceiveStreams();
-    a2_->CloseSendStreams();
-    a2_->CloseReceiveStreams();
+    CloseStreams();
 
     // Check caller video settings for remote pipeline
-    a1_->CheckMediaPipeline(0, 1, (fRtcpMux ? PIPELINE_RTCP_MUX : 0) |
+    a1_->CheckMediaPipeline(0, true, (fRtcpMux ? PIPELINE_RTCP_MUX : 0) |
       PIPELINE_VIDEO | rtcpFbFlags, frameRequestMethod);
 
     // Check caller video settings for remote pipeline
     // (Should use pli and nack, regardless of what was in the offer)
-    a2_->CheckMediaPipeline(0, 1,
+    a2_->CheckMediaPipeline(0, true,
                             (fRtcpMux ? PIPELINE_RTCP_MUX : 0) |
                             PIPELINE_VIDEO |
-                            PIPELINE_SEND |
                             PIPELINE_RTCP_NACK,
                             VideoSessionConduit::FrameRequestPli);
   }
@@ -1936,21 +2040,17 @@ public:
 
     WaitForCompleted();
 
-    a1_->CloseSendStreams();
-    a1_->CloseReceiveStreams();
-    a2_->CloseSendStreams();
-    a2_->CloseReceiveStreams();
+    CloseStreams();
 
     // Check callee video settings for remote pipeline
-    a2_->CheckMediaPipeline(0, 1, (fRtcpMux ? PIPELINE_RTCP_MUX : 0) |
+    a2_->CheckMediaPipeline(0, true, (fRtcpMux ? PIPELINE_RTCP_MUX : 0) |
       PIPELINE_VIDEO | rtcpFbFlags, frameRequestMethod);
 
     // Check caller video settings for remote pipeline
     // (Should use pli and nack, regardless of what was in the offer)
-    a1_->CheckMediaPipeline(0, 1,
+    a1_->CheckMediaPipeline(0, true,
                             (fRtcpMux ? PIPELINE_RTCP_MUX : 0) |
                             PIPELINE_VIDEO |
-                            PIPELINE_SEND |
                             PIPELINE_RTCP_NACK,
                             VideoSessionConduit::FrameRequestPli);
   }
@@ -2006,6 +2106,14 @@ public:
       ss << "max-fr=" << max_fr;
       ASSERT_NE(line.find(ss.str()), std::string::npos);
     }
+  }
+
+  void CloseStreams()
+  {
+    a1_->CloseSendStreams();
+    a2_->CloseSendStreams();
+    a1_->CloseReceiveStreams();
+    a2_->CloseReceiveStreams();
   }
 
  protected:
@@ -2066,23 +2174,23 @@ class FsFrPrefClearer {
     nsCOMPtr<nsIPrefBranch> mPrefs;
 };
 
-TEST_F(SignalingTest, JustInit)
+TEST_P(SignalingTest, JustInit)
 {
 }
 
-TEST_F(SignalingTest, CreateSetOffer)
+TEST_P(SignalingTest, CreateSetOffer)
 {
   OfferOptions options;
   CreateSetOffer(options, SHOULD_SENDRECV_AV);
 }
 
-TEST_F(SignalingTest, CreateOfferAudioVideoOptionUndefined)
+TEST_P(SignalingTest, CreateOfferAudioVideoOptionUndefined)
 {
   OfferOptions options;
   CreateOffer(options, OFFER_AV, SHOULD_SENDRECV_AV);
 }
 
-TEST_F(SignalingTest, CreateOfferNoVideoStreamRecvVideo)
+TEST_P(SignalingTest, CreateOfferNoVideoStreamRecvVideo)
 {
   OfferOptions options;
   options.setInt32Option("OfferToReceiveAudio", 1);
@@ -2091,7 +2199,7 @@ TEST_F(SignalingTest, CreateOfferNoVideoStreamRecvVideo)
               SHOULD_SENDRECV_AUDIO | SHOULD_RECV_VIDEO);
 }
 
-TEST_F(SignalingTest, CreateOfferNoAudioStreamRecvAudio)
+TEST_P(SignalingTest, CreateOfferNoAudioStreamRecvAudio)
 {
   OfferOptions options;
   options.setInt32Option("OfferToReceiveAudio", 1);
@@ -2100,7 +2208,7 @@ TEST_F(SignalingTest, CreateOfferNoAudioStreamRecvAudio)
               SHOULD_RECV_AUDIO | SHOULD_SENDRECV_VIDEO);
 }
 
-TEST_F(SignalingTest, CreateOfferNoVideoStream)
+TEST_P(SignalingTest, CreateOfferNoVideoStream)
 {
   OfferOptions options;
   options.setInt32Option("OfferToReceiveAudio", 1);
@@ -2109,7 +2217,7 @@ TEST_F(SignalingTest, CreateOfferNoVideoStream)
               SHOULD_SENDRECV_AUDIO | SHOULD_OMIT_VIDEO);
 }
 
-TEST_F(SignalingTest, CreateOfferNoAudioStream)
+TEST_P(SignalingTest, CreateOfferNoAudioStream)
 {
   OfferOptions options;
   options.setInt32Option("OfferToReceiveAudio", 0);
@@ -2118,7 +2226,7 @@ TEST_F(SignalingTest, CreateOfferNoAudioStream)
               SHOULD_OMIT_AUDIO | SHOULD_SENDRECV_VIDEO);
 }
 
-TEST_F(SignalingTest, CreateOfferDontReceiveAudio)
+TEST_P(SignalingTest, CreateOfferDontReceiveAudio)
 {
   OfferOptions options;
   options.setInt32Option("OfferToReceiveAudio", 0);
@@ -2127,7 +2235,7 @@ TEST_F(SignalingTest, CreateOfferDontReceiveAudio)
               SHOULD_SEND_AUDIO | SHOULD_SENDRECV_VIDEO);
 }
 
-TEST_F(SignalingTest, CreateOfferDontReceiveVideo)
+TEST_P(SignalingTest, CreateOfferDontReceiveVideo)
 {
   OfferOptions options;
   options.setInt32Option("OfferToReceiveAudio", 1);
@@ -2136,44 +2244,40 @@ TEST_F(SignalingTest, CreateOfferDontReceiveVideo)
               SHOULD_SENDRECV_AUDIO | SHOULD_SEND_VIDEO);
 }
 
-// XXX Disabled pending resolution of Bug 840728
-TEST_F(SignalingTest, DISABLED_CreateOfferRemoveAudioStream)
+TEST_P(SignalingTest, CreateOfferRemoveAudioTrack)
 {
   OfferOptions options;
   options.setInt32Option("OfferToReceiveAudio", 1);
   options.setInt32Option("OfferToReceiveVideo", 1);
-  CreateOfferRemoveStream(options, DOMMediaStream::HINT_CONTENTS_AUDIO,
-              SHOULD_RECV_AUDIO | SHOULD_SENDRECV_VIDEO);
+  CreateOfferRemoveTrack(options, false,
+                         SHOULD_RECV_AUDIO | SHOULD_SENDRECV_VIDEO);
 }
 
-// XXX Disabled pending resolution of Bug 840728
-TEST_F(SignalingTest, DISABLED_CreateOfferDontReceiveAudioRemoveAudioStream)
+TEST_P(SignalingTest, CreateOfferDontReceiveAudioRemoveAudioTrack)
 {
   OfferOptions options;
   options.setInt32Option("OfferToReceiveAudio", 0);
   options.setInt32Option("OfferToReceiveVideo", 1);
-  CreateOfferRemoveStream(options, DOMMediaStream::HINT_CONTENTS_AUDIO,
-              SHOULD_SENDRECV_VIDEO);
+  CreateOfferRemoveTrack(options, false, SHOULD_SENDRECV_VIDEO | SHOULD_OMIT_AUDIO);
 }
 
-// XXX Disabled pending resolution of Bug 840728
-TEST_F(SignalingTest, DISABLED_CreateOfferDontReceiveVideoRemoveVideoStream)
+TEST_P(SignalingTest, CreateOfferDontReceiveVideoRemoveVideoTrack)
 {
   OfferOptions options;
   options.setInt32Option("OfferToReceiveAudio", 1);
   options.setInt32Option("OfferToReceiveVideo", 0);
-  CreateOfferRemoveStream(options, DOMMediaStream::HINT_CONTENTS_VIDEO,
-              SHOULD_SENDRECV_AUDIO);
+  CreateOfferRemoveTrack(options, true,
+                         SHOULD_SENDRECV_AUDIO);
 }
 
-TEST_F(SignalingTest, OfferAnswerNothingDisabled)
+TEST_P(SignalingTest, OfferAnswerNothingDisabled)
 {
   OfferOptions options;
   OfferAnswer(options, OFFER_AV | ANSWER_AV,
               SHOULD_SENDRECV_AV, SHOULD_SENDRECV_AV);
 }
 
-TEST_F(SignalingTest, OfferAnswerNoTrickle)
+TEST_P(SignalingTest, OfferAnswerNoTrickle)
 {
   OfferOptions options;
   OfferAnswer(options, OFFER_AV | ANSWER_AV,
@@ -2182,7 +2286,7 @@ TEST_F(SignalingTest, OfferAnswerNoTrickle)
               NO_TRICKLE);
 }
 
-TEST_F(SignalingTest, OfferAnswerOffererTrickles)
+TEST_P(SignalingTest, OfferAnswerOffererTrickles)
 {
   OfferOptions options;
   OfferAnswer(options, OFFER_AV | ANSWER_AV,
@@ -2191,7 +2295,7 @@ TEST_F(SignalingTest, OfferAnswerOffererTrickles)
               OFFERER_TRICKLES);
 }
 
-TEST_F(SignalingTest, OfferAnswerAnswererTrickles)
+TEST_P(SignalingTest, OfferAnswerAnswererTrickles)
 {
   OfferOptions options;
   OfferAnswer(options, OFFER_AV | ANSWER_AV,
@@ -2199,7 +2303,7 @@ TEST_F(SignalingTest, OfferAnswerAnswererTrickles)
               ANSWERER_TRICKLES);
 }
 
-TEST_F(SignalingTest, OfferAnswerBothTrickle)
+TEST_P(SignalingTest, OfferAnswerBothTrickle)
 {
   OfferOptions options;
   OfferAnswer(options, OFFER_AV | ANSWER_AV,
@@ -2207,7 +2311,7 @@ TEST_F(SignalingTest, OfferAnswerBothTrickle)
               BOTH_TRICKLE);
 }
 
-TEST_F(SignalingTest, OfferAnswerAudioBothTrickle)
+TEST_P(SignalingTest, OfferAnswerAudioBothTrickle)
 {
   OfferOptions options;
   OfferAnswer(options, OFFER_AUDIO | ANSWER_AUDIO,
@@ -2216,7 +2320,7 @@ TEST_F(SignalingTest, OfferAnswerAudioBothTrickle)
 }
 
 
-TEST_F(SignalingTest, OfferAnswerNothingDisabledFullCycle)
+TEST_P(SignalingTest, OfferAnswerNothingDisabledFullCycle)
 {
   OfferOptions options;
   OfferAnswer(options, OFFER_AV | ANSWER_AV,
@@ -2230,7 +2334,7 @@ TEST_F(SignalingTest, OfferAnswerNothingDisabledFullCycle)
 }
 
 // XXX reject streams has changed. Re-enable when we can stop() received stream
-TEST_F(SignalingTest, DISABLED_OfferAnswerDontReceiveAudioOnOffer)
+TEST_P(SignalingTest, DISABLED_OfferAnswerDontReceiveAudioOnOffer)
 {
   OfferOptions options;
   options.setInt32Option("OfferToReceiveAudio", 0);
@@ -2241,7 +2345,7 @@ TEST_F(SignalingTest, DISABLED_OfferAnswerDontReceiveAudioOnOffer)
 }
 
 // XXX reject streams has changed. Re-enable when we can stop() received stream
-TEST_F(SignalingTest, DISABLED_OfferAnswerDontReceiveVideoOnOffer)
+TEST_P(SignalingTest, DISABLED_OfferAnswerDontReceiveVideoOnOffer)
 {
   OfferOptions options;
   options.setInt32Option("OfferToReceiveAudio", 1);
@@ -2252,7 +2356,7 @@ TEST_F(SignalingTest, DISABLED_OfferAnswerDontReceiveVideoOnOffer)
 }
 
 // XXX reject streams has changed. Re-enable when we can stop() received stream
-TEST_F(SignalingTest, DISABLED_OfferAnswerDontReceiveAudioOnAnswer)
+TEST_P(SignalingTest, DISABLED_OfferAnswerDontReceiveAudioOnAnswer)
 {
   OfferOptions options;
   options.setInt32Option("OfferToReceiveAudio", 1);
@@ -2263,7 +2367,7 @@ TEST_F(SignalingTest, DISABLED_OfferAnswerDontReceiveAudioOnAnswer)
 }
 
 // XXX reject streams has changed. Re-enable when we can stop() received stream
-TEST_F(SignalingTest, DISABLED_OfferAnswerDontReceiveVideoOnAnswer)
+TEST_P(SignalingTest, DISABLED_OfferAnswerDontReceiveVideoOnAnswer)
 {
   OfferOptions options;
   options.setInt32Option("OfferToReceiveAudio", 1);
@@ -2274,7 +2378,7 @@ TEST_F(SignalingTest, DISABLED_OfferAnswerDontReceiveVideoOnAnswer)
 }
 
 // XXX reject streams has changed. Re-enable when we can stop() received stream
-TEST_F(SignalingTest, DISABLED_OfferAnswerDontAddAudioStreamOnOfferRecvAudio)
+TEST_P(SignalingTest, DISABLED_OfferAnswerDontAddAudioStreamOnOfferRecvAudio)
 {
   OfferOptions options;
   options.setInt32Option("OfferToReceiveAudio", 1);
@@ -2284,7 +2388,7 @@ TEST_F(SignalingTest, DISABLED_OfferAnswerDontAddAudioStreamOnOfferRecvAudio)
               SHOULD_SEND_AUDIO | SHOULD_SENDRECV_VIDEO);
 }
 
-TEST_F(SignalingTest, OfferAnswerAudioInactive)
+TEST_P(SignalingTest, OfferAnswerAudioInactive)
 {
   OfferOptions options;
   options.setInt32Option("OfferToReceiveAudio", 1);
@@ -2294,7 +2398,7 @@ TEST_F(SignalingTest, OfferAnswerAudioInactive)
               SHOULD_SENDRECV_VIDEO | SHOULD_INACTIVE_AUDIO);
 }
 
-TEST_F(SignalingTest, OfferAnswerVideoInactive)
+TEST_P(SignalingTest, OfferAnswerVideoInactive)
 {
   OfferOptions options;
   options.setInt32Option("OfferToReceiveAudio", 1);
@@ -2307,8 +2411,7 @@ TEST_F(SignalingTest, OfferAnswerVideoInactive)
   ASSERT_TRUE_WAIT(a1_->GetPacketsSent(0) >= 40 &&
                    a2_->GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
 
-  a1_->CloseSendStreams();
-  a2_->CloseReceiveStreams();
+  CloseStreams();
   // Check that we wrote a bunch of data
   ASSERT_GE(a1_->GetPacketsSent(0), 40);
   //ASSERT_GE(a2_->GetPacketsSent(0), 40);
@@ -2316,7 +2419,7 @@ TEST_F(SignalingTest, OfferAnswerVideoInactive)
   ASSERT_GE(a2_->GetPacketsReceived(0), 40);
 }
 
-TEST_F(SignalingTest, OfferAnswerBothInactive)
+TEST_P(SignalingTest, OfferAnswerBothInactive)
 {
   OfferOptions options;
   options.setInt32Option("OfferToReceiveAudio", 1);
@@ -2327,7 +2430,7 @@ TEST_F(SignalingTest, OfferAnswerBothInactive)
 }
 
 // XXX reject streams has changed. Re-enable when we can stop() received stream
-TEST_F(SignalingTest, DISABLED_OfferAnswerDontAddAudioStreamOnOffer)
+TEST_P(SignalingTest, DISABLED_OfferAnswerDontAddAudioStreamOnOffer)
 {
   OfferOptions options;
   options.setInt32Option("OfferToReceiveAudio", 0);
@@ -2338,7 +2441,7 @@ TEST_F(SignalingTest, DISABLED_OfferAnswerDontAddAudioStreamOnOffer)
 }
 
 // XXX reject streams has changed. Re-enable when we can stop() received stream
-TEST_F(SignalingTest, DISABLED_OfferAnswerDontAddVideoStreamOnOfferRecvVideo)
+TEST_P(SignalingTest, DISABLED_OfferAnswerDontAddVideoStreamOnOfferRecvVideo)
 {
   OfferOptions options;
   options.setInt32Option("OfferToReceiveAudio", 1);
@@ -2349,7 +2452,7 @@ TEST_F(SignalingTest, DISABLED_OfferAnswerDontAddVideoStreamOnOfferRecvVideo)
 }
 
 // XXX reject streams has changed. Re-enable when we can stop() received stream
-TEST_F(SignalingTest, DISABLED_OfferAnswerDontAddVideoStreamOnOffer)
+TEST_P(SignalingTest, DISABLED_OfferAnswerDontAddVideoStreamOnOffer)
 {
   OfferOptions options;
   options.setInt32Option("OfferToReceiveAudio", 1);
@@ -2360,7 +2463,7 @@ TEST_F(SignalingTest, DISABLED_OfferAnswerDontAddVideoStreamOnOffer)
 }
 
 // XXX reject streams has changed. Re-enable when we can stop() received stream
-TEST_F(SignalingTest, DISABLED_OfferAnswerDontAddAudioStreamOnAnswer)
+TEST_P(SignalingTest, DISABLED_OfferAnswerDontAddAudioStreamOnAnswer)
 {
   OfferOptions options;
   options.setInt32Option("OfferToReceiveAudio", 1);
@@ -2371,7 +2474,7 @@ TEST_F(SignalingTest, DISABLED_OfferAnswerDontAddAudioStreamOnAnswer)
 }
 
 // XXX reject streams has changed. Re-enable when we can stop() received stream
-TEST_F(SignalingTest, DISABLED_OfferAnswerDontAddVideoStreamOnAnswer)
+TEST_P(SignalingTest, DISABLED_OfferAnswerDontAddVideoStreamOnAnswer)
 {
   OfferOptions options;
   options.setInt32Option("OfferToReceiveAudio", 1);
@@ -2382,7 +2485,7 @@ TEST_F(SignalingTest, DISABLED_OfferAnswerDontAddVideoStreamOnAnswer)
 }
 
 // XXX reject streams has changed. Re-enable when we can stop() received stream
-TEST_F(SignalingTest,
+TEST_P(SignalingTest,
        DISABLED_OfferAnswerDontAddVideoStreamOnAnswerDontReceiveVideoOnAnswer)
 {
   OfferOptions options;
@@ -2393,7 +2496,7 @@ TEST_F(SignalingTest,
 }
 
 // XXX reject streams has changed. Re-enable when we can stop() received stream
-TEST_F(SignalingTest,
+TEST_P(SignalingTest,
        DISABLED_OfferAnswerDontAddAudioStreamOnAnswerDontReceiveAudioOnAnswer)
 {
   OfferOptions options;
@@ -2405,7 +2508,7 @@ TEST_F(SignalingTest,
 }
 
 // XXX reject streams has changed. Re-enable when we can stop() received stream
-TEST_F(SignalingTest,
+TEST_P(SignalingTest,
        DISABLED_OfferAnswerDontAddAudioStreamOnOfferDontReceiveAudioOnOffer)
 {
   OfferOptions options;
@@ -2416,7 +2519,7 @@ TEST_F(SignalingTest,
 }
 
 // XXX reject streams has changed. Re-enable when we can stop() received stream
-TEST_F(SignalingTest,
+TEST_P(SignalingTest,
        DISABLED_OfferAnswerDontAddVideoStreamOnOfferDontReceiveVideoOnOffer)
 {
   OfferOptions options;
@@ -2428,7 +2531,7 @@ TEST_F(SignalingTest,
 }
 
 // XXX reject streams has changed. Re-enable when we can stop() received stream
-TEST_F(SignalingTest,
+TEST_P(SignalingTest,
   DISABLED_OfferAnswerDontReceiveAudioNoAudioStreamOnOfferDontReceiveVideoOnAnswer)
 {
   OfferOptions options;
@@ -2438,7 +2541,7 @@ TEST_F(SignalingTest,
               SHOULD_SENDRECV_VIDEO, SHOULD_SEND_VIDEO);
 }
 
-TEST_F(SignalingTest, CreateOfferAddCandidate)
+TEST_P(SignalingTest, CreateOfferAddCandidate)
 {
   OfferOptions options;
   CreateOfferAddCandidate(options, strSampleCandidate,
@@ -2446,7 +2549,7 @@ TEST_F(SignalingTest, CreateOfferAddCandidate)
                           SHOULD_SENDRECV_AV);
 }
 
-TEST_F(SignalingTest, AddIceCandidateEarly)
+TEST_P(SignalingTest, AddIceCandidateEarly)
 {
   OfferOptions options;
   AddIceCandidateEarly(strSampleCandidate,
@@ -2455,7 +2558,7 @@ TEST_F(SignalingTest, AddIceCandidateEarly)
 
 // XXX adam@nostrum.com -- This test seems questionable; we need to think
 // through what actually needs to be tested here.
-TEST_F(SignalingTest, DISABLED_OfferAnswerReNegotiateOfferAnswerDontReceiveVideoNoVideoStream)
+TEST_P(SignalingTest, DISABLED_OfferAnswerReNegotiateOfferAnswerDontReceiveVideoNoVideoStream)
 {
   OfferOptions aoptions;
   aoptions.setInt32Option("OfferToReceiveAudio", 1);
@@ -2472,7 +2575,7 @@ TEST_F(SignalingTest, DISABLED_OfferAnswerReNegotiateOfferAnswerDontReceiveVideo
               SHOULD_SENDRECV_AUDIO | SHOULD_INACTIVE_VIDEO);
 }
 
-TEST_F(SignalingTest, OfferAnswerDontAddAudioStreamOnAnswerNoOptions)
+TEST_P(SignalingTest, OfferAnswerDontAddAudioStreamOnAnswerNoOptions)
 {
   OfferOptions options;
   options.setInt32Option("OfferToReceiveAudio", 1);
@@ -2482,7 +2585,7 @@ TEST_F(SignalingTest, OfferAnswerDontAddAudioStreamOnAnswerNoOptions)
               SHOULD_RECV_AUDIO | SHOULD_SENDRECV_VIDEO);
 }
 
-TEST_F(SignalingTest, OfferAnswerDontAddVideoStreamOnAnswerNoOptions)
+TEST_P(SignalingTest, OfferAnswerDontAddVideoStreamOnAnswerNoOptions)
 {
   OfferOptions options;
   options.setInt32Option("OfferToReceiveAudio", 1);
@@ -2492,7 +2595,7 @@ TEST_F(SignalingTest, OfferAnswerDontAddVideoStreamOnAnswerNoOptions)
               SHOULD_SENDRECV_AUDIO | SHOULD_RECV_VIDEO);
 }
 
-TEST_F(SignalingTest, OfferAnswerDontAddAudioVideoStreamsOnAnswerNoOptions)
+TEST_P(SignalingTest, OfferAnswerDontAddAudioVideoStreamsOnAnswerNoOptions)
 {
   OfferOptions options;
   options.setInt32Option("OfferToReceiveAudio", 1);
@@ -2502,7 +2605,7 @@ TEST_F(SignalingTest, OfferAnswerDontAddAudioVideoStreamsOnAnswerNoOptions)
               SHOULD_RECV_AUDIO | SHOULD_RECV_VIDEO);
 }
 
-TEST_F(SignalingTest, FullCall)
+TEST_P(SignalingTest, FullCall)
 {
   OfferOptions options;
   OfferAnswer(options, OFFER_AV | ANSWER_AV,
@@ -2512,26 +2615,356 @@ TEST_F(SignalingTest, FullCall)
   ASSERT_TRUE_WAIT(a1_->GetPacketsSent(0) >= 40 &&
                    a2_->GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
 
-  a1_->CloseSendStreams();
-  a2_->CloseReceiveStreams();
+  ASSERT_TRUE_WAIT(a2_->GetPacketsSent(0) >= 40 &&
+                   a1_->GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
+
+  CloseStreams();
   // Check that we wrote a bunch of data
   ASSERT_GE(a1_->GetPacketsSent(0), 40);
-  //ASSERT_GE(a2_->GetPacketsSent(0), 40);
-  //ASSERT_GE(a1_->GetPacketsReceived(0), 40);
+  ASSERT_GE(a2_->GetPacketsSent(0), 40);
+  ASSERT_GE(a1_->GetPacketsReceived(0), 40);
   ASSERT_GE(a2_->GetPacketsReceived(0), 40);
 
   // Check the low-level media pipeline
   // for RTP and RTCP flows
   // The first Local pipeline gets stored at 0
-  a1_->CheckMediaPipeline(0, 0, fRtcpMux ?
-    PIPELINE_LOCAL | PIPELINE_RTCP_MUX | PIPELINE_SEND :
-    PIPELINE_LOCAL | PIPELINE_SEND);
+  a1_->CheckMediaPipeline(0, false, fRtcpMux ?
+    PIPELINE_RTCP_MUX | PIPELINE_SEND :
+    PIPELINE_SEND);
 
   // The first Remote pipeline gets stored at 0
-  a2_->CheckMediaPipeline(0, 0, (fRtcpMux ?  PIPELINE_RTCP_MUX : 0));
+  a2_->CheckMediaPipeline(0, false, (fRtcpMux ?  PIPELINE_RTCP_MUX : 0));
 }
 
-TEST_F(SignalingTest, FullCallAudioOnly)
+TEST_P(SignalingTest, RenegotiationOffererAddsTracks)
+{
+  OfferOptions options;
+  OfferAnswer(options, OFFER_AV | ANSWER_AV,
+              SHOULD_SENDRECV_AV, SHOULD_SENDRECV_AV);
+
+  // Wait for some data to get received
+  ASSERT_TRUE_WAIT(a2_->GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
+  // Not really packets, but audio segments, happens later
+  ASSERT_TRUE_WAIT(a1_->GetPacketsSent(0) >= 40, kDefaultTimeout * 2);
+
+  // OFFER_AV causes a new stream + tracks to be added
+  OfferAnswer(options, OFFER_AV,
+              SHOULD_SENDRECV_AV, SHOULD_SENDRECV_AV);
+
+  // Wait for some more data to get received
+  ASSERT_TRUE_WAIT(a2_->GetPacketsReceived(1) >= 40, kDefaultTimeout * 2);
+  // Not really packets, but audio segments, happens later
+  ASSERT_TRUE_WAIT(a1_->GetPacketsSent(1) >= 40, kDefaultTimeout * 2);
+
+  CloseStreams();
+
+  // Check the low-level media pipeline
+  // for RTP and RTCP flows
+  for (size_t i = 0; i < 2; ++i) {
+    a2_->CheckMediaPipeline(i,
+                            false,
+                            (fRtcpMux ?  PIPELINE_RTCP_MUX : 0));
+    a1_->CheckMediaPipeline(i,
+                            false,
+                            (fRtcpMux ?  PIPELINE_RTCP_MUX : 0) |
+                            PIPELINE_SEND);
+  }
+
+  a1_->CheckMediaPipeline(0,
+                          false,
+                          (fRtcpMux ?  PIPELINE_RTCP_MUX : 0));
+  a2_->CheckMediaPipeline(0,
+                          false,
+                          (fRtcpMux ?  PIPELINE_RTCP_MUX : 0) |
+                          PIPELINE_SEND);
+}
+
+TEST_P(SignalingTest, RenegotiationOffererRemovesTrack)
+{
+  OfferOptions options;
+  OfferAnswer(options, OFFER_AV | ANSWER_AV,
+              SHOULD_SENDRECV_AV, SHOULD_SENDRECV_AV);
+
+  // Wait for some data to get received
+  ASSERT_TRUE_WAIT(a1_->GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
+  // Not really packets, but audio segments, happens later
+  ASSERT_TRUE_WAIT(a2_->GetPacketsSent(0) >= 40, kDefaultTimeout * 2);
+
+  int a2PacketsSent = a2_->GetPacketsSent(0);
+  int a1PacketsReceived = a1_->GetPacketsReceived(0);
+
+  a1_->RemoveTrack(0, false);
+
+  OfferAnswer(options, OFFER_NONE,
+              SHOULD_RECV_AUDIO | SHOULD_SENDRECV_VIDEO,
+              SHOULD_SEND_AUDIO | SHOULD_SENDRECV_VIDEO);
+
+  ASSERT_TRUE_WAIT(a1_->GetPacketsReceived(0) >= a1PacketsReceived + 40,
+                   kDefaultTimeout * 2);
+  ASSERT_TRUE_WAIT(a2_->GetPacketsSent(0) >= a2PacketsSent + 40,
+                   kDefaultTimeout * 2);
+
+  CloseStreams();
+}
+
+TEST_P(SignalingTest, RenegotiationOffererReplacesTrack)
+{
+  OfferOptions options;
+  OfferAnswer(options, OFFER_AV | ANSWER_AV,
+              SHOULD_SENDRECV_AV, SHOULD_SENDRECV_AV);
+
+  // Wait for some data to get received
+  ASSERT_TRUE_WAIT(a2_->GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
+  // Not really packets, but audio segments, happens later
+  ASSERT_TRUE_WAIT(a1_->GetPacketsSent(0) >= 40, kDefaultTimeout * 2);
+
+  a1_->RemoveTrack(0, false);
+
+  // OFFER_AUDIO causes a new audio track to be added on both sides
+  OfferAnswer(options, OFFER_AUDIO,
+              SHOULD_SENDRECV_AV, SHOULD_SENDRECV_AV);
+
+  // Wait for some more data to get received
+  ASSERT_TRUE_WAIT(a2_->GetPacketsReceived(1) >= 40, kDefaultTimeout * 2);
+  // Not really packets, but audio segments, happens later
+  ASSERT_TRUE_WAIT(a1_->GetPacketsSent(1) >= 40, kDefaultTimeout * 2);
+
+  CloseStreams();
+
+  // Check the low-level media pipeline
+  // for RTP and RTCP flows
+  a1_->CheckMediaPipeline(1, false, fRtcpMux ?
+    PIPELINE_RTCP_MUX | PIPELINE_SEND :
+    PIPELINE_SEND);
+
+  a2_->CheckMediaPipeline(1, false, (fRtcpMux ?  PIPELINE_RTCP_MUX : 0));
+}
+
+TEST_P(SignalingTest, RenegotiationOffererSwapsMsids)
+{
+  OfferOptions options;
+
+  EnsureInit();
+  // Create a media stream as if it came from GUM
+  Fake_AudioStreamSource *audio_stream =
+    new Fake_AudioStreamSource();
+
+  nsresult ret;
+  mozilla::SyncRunnable::DispatchToThread(
+    test_utils->sts_target(),
+    WrapRunnableRet(audio_stream, &Fake_MediaStream::Start, &ret));
+
+  ASSERT_TRUE(NS_SUCCEEDED(ret));
+
+  a1_->AddStream(DOMMediaStream::HINT_CONTENTS_AUDIO |
+                 DOMMediaStream::HINT_CONTENTS_VIDEO, audio_stream);
+
+  OfferAnswer(options, OFFER_AV | ANSWER_AV,
+              SHOULD_SENDRECV_AV, SHOULD_SENDRECV_AV);
+
+  // Wait for some data to get received
+  ASSERT_TRUE_WAIT(a2_->GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
+  // Not really packets, but audio segments, happens later
+  ASSERT_TRUE_WAIT(a1_->GetPacketsSent(0) >= 40, kDefaultTimeout * 2);
+
+  a1_->CreateOffer(options, OFFER_NONE, SHOULD_SENDRECV_AV);
+  a1_->SetLocal(TestObserver::OFFER, a1_->offer());
+  std::string audioSwapped = SwapMsids(a1_->offer(), false);
+  std::string audioAndVideoSwapped = SwapMsids(audioSwapped, true);
+  std::cout << "Msids swapped: " << std::endl << audioAndVideoSwapped << std::endl;
+  a2_->SetRemote(TestObserver::OFFER, audioAndVideoSwapped);
+  Answer(options, OFFER_NONE, SHOULD_SENDRECV_AV, BOTH_TRICKLE);
+  WaitForCompleted();
+
+  // Wait for some more data to get received
+  ASSERT_TRUE_WAIT(a2_->GetPacketsReceived(1) >= 80, kDefaultTimeout * 2);
+  // Not really packets, but audio segments, happens later
+  ASSERT_TRUE_WAIT(a1_->GetPacketsSent(1) >= 80, kDefaultTimeout * 2);
+
+  CloseStreams();
+
+  for (size_t i = 0; i < 2; ++i) {
+    // Check the low-level media pipeline
+    // for RTP and RTCP flows
+    a1_->CheckMediaPipeline(i, false, fRtcpMux ?
+      PIPELINE_RTCP_MUX | PIPELINE_SEND :
+      PIPELINE_SEND);
+
+    a2_->CheckMediaPipeline(i, false, (fRtcpMux ?  PIPELINE_RTCP_MUX : 0));
+  }
+}
+
+TEST_P(SignalingTest, RenegotiationAnswererAddsTracks)
+{
+  OfferOptions options;
+  OfferAnswer(options, OFFER_AV | ANSWER_AV,
+              SHOULD_SENDRECV_AV, SHOULD_SENDRECV_AV);
+
+  // Wait for some data to get received
+  ASSERT_TRUE_WAIT(a1_->GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
+  // Not really packets, but audio segments, happens later
+  ASSERT_TRUE_WAIT(a2_->GetPacketsSent(0) >= 40, kDefaultTimeout * 2);
+
+  options.setInt32Option("OfferToReceiveAudio", 2);
+  options.setInt32Option("OfferToReceiveVideo", 2);
+
+  // ANSWER_AV causes a new stream + tracks to be added
+  OfferAnswer(options, ANSWER_AV,
+              SHOULD_SENDRECV_AV, SHOULD_SENDRECV_AV);
+
+  ASSERT_TRUE_WAIT(a1_->GetPacketsReceived(1) >= 40, kDefaultTimeout * 2);
+  ASSERT_TRUE_WAIT(a2_->GetPacketsSent(1) >= 40, kDefaultTimeout * 2);
+
+  CloseStreams();
+
+  // Check the low-level media pipeline
+  // for RTP and RTCP flows
+  for (size_t i = 0; i < 2; ++i) {
+    a1_->CheckMediaPipeline(i,
+                            false,
+                            (fRtcpMux ?  PIPELINE_RTCP_MUX : 0));
+    a2_->CheckMediaPipeline(i,
+                            false,
+                            (fRtcpMux ?  PIPELINE_RTCP_MUX : 0) |
+                            PIPELINE_SEND);
+  }
+
+  a2_->CheckMediaPipeline(0,
+                          false,
+                          (fRtcpMux ?  PIPELINE_RTCP_MUX : 0));
+  a1_->CheckMediaPipeline(0,
+                          false,
+                          (fRtcpMux ?  PIPELINE_RTCP_MUX : 0) |
+                          PIPELINE_SEND);
+}
+
+TEST_P(SignalingTest, RenegotiationAnswererRemovesTrack)
+{
+  OfferOptions options;
+  OfferAnswer(options, OFFER_AV | ANSWER_AV,
+              SHOULD_SENDRECV_AV, SHOULD_SENDRECV_AV);
+
+  // Wait for some data to get received
+  ASSERT_TRUE_WAIT(a2_->GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
+  // Not really packets, but audio segments, happens later
+  ASSERT_TRUE_WAIT(a1_->GetPacketsSent(0) >= 40, kDefaultTimeout * 2);
+
+  int a1PacketsSent = a1_->GetPacketsSent(0);
+  int a2PacketsReceived = a2_->GetPacketsReceived(0);
+
+  a2_->RemoveTrack(0, false);
+
+  OfferAnswer(options, OFFER_NONE,
+              SHOULD_SENDRECV_AUDIO | SHOULD_SENDRECV_VIDEO,
+              SHOULD_RECV_AUDIO | SHOULD_SENDRECV_VIDEO);
+
+  ASSERT_TRUE_WAIT(a2_->GetPacketsReceived(0) >= a2PacketsReceived + 40,
+                   kDefaultTimeout * 2);
+  ASSERT_TRUE_WAIT(a1_->GetPacketsSent(0) >= a1PacketsSent + 40,
+                   kDefaultTimeout * 2);
+
+  CloseStreams();
+}
+
+TEST_P(SignalingTest, RenegotiationAnswererReplacesTrack)
+{
+  OfferOptions options;
+  OfferAnswer(options, OFFER_AV | ANSWER_AV,
+              SHOULD_SENDRECV_AV, SHOULD_SENDRECV_AV);
+
+  // Wait for some data to get written
+  ASSERT_TRUE_WAIT(a1_->GetPacketsSent(0) >= 40 &&
+                   a2_->GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
+
+  ASSERT_TRUE_WAIT(a2_->GetPacketsSent(0) >= 40 &&
+                   a1_->GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
+
+  int a1PacketsSent = a1_->GetPacketsSent(0);
+  int a2PacketsReceived = a2_->GetPacketsReceived(0);
+
+  a2_->RemoveTrack(0, false);
+
+  // ANSWER_AUDIO causes a new audio track to be added
+  OfferAnswer(options, ANSWER_AUDIO,
+              SHOULD_SENDRECV_AV, SHOULD_SENDRECV_AV);
+
+  // Wait for some more data to get written
+  ASSERT_TRUE_WAIT(a1_->GetPacketsSent(0) >= a1PacketsSent + 40 &&
+                   a2_->GetPacketsReceived(0) >= a2PacketsReceived + 40,
+                   kDefaultTimeout * 2);
+
+  // The other direction is going to start over
+  ASSERT_TRUE_WAIT(a2_->GetPacketsSent(0) >= 40 &&
+                   a1_->GetPacketsReceived(0) >= 40,
+                   kDefaultTimeout * 2);
+
+  CloseStreams();
+
+  // Check the low-level media pipeline
+  // for RTP and RTCP flows
+  a1_->CheckMediaPipeline(0, false, fRtcpMux ?
+    PIPELINE_RTCP_MUX | PIPELINE_SEND :
+    PIPELINE_SEND);
+
+  a2_->CheckMediaPipeline(0, false, (fRtcpMux ?  PIPELINE_RTCP_MUX : 0));
+}
+
+TEST_P(SignalingTest, BundleRenegotiation)
+{
+  if (GetParam() == "bundle") {
+    // We don't support ICE restart, which is a prereq for renegotiating bundle
+    // off.
+    return;
+  }
+
+  OfferOptions options;
+  OfferAnswer(options, OFFER_AV | ANSWER_AV,
+              SHOULD_SENDRECV_AV, SHOULD_SENDRECV_AV);
+
+  // Wait for some data to get written
+  ASSERT_TRUE_WAIT(a1_->GetPacketsSent(0) >= 40 &&
+                   a2_->GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
+
+  ASSERT_TRUE_WAIT(a2_->GetPacketsSent(0) >= 40 &&
+                   a1_->GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
+
+  int a1PacketsSent = a1_->GetPacketsSent(0);
+  int a2PacketsSent = a2_->GetPacketsSent(0);
+  int a1PacketsReceived = a1_->GetPacketsReceived(0);
+  int a2PacketsReceived = a2_->GetPacketsReceived(0);
+
+  // If we did bundle before, turn it off, if not, turn it on
+  if (a1_->mBundleEnabled && a2_->mBundleEnabled) {
+    a1_->SetBundleEnabled(false);
+  } else {
+    a1_->SetBundleEnabled(true);
+    a2_->SetBundleEnabled(true);
+  }
+
+  OfferAnswer(options, OFFER_NONE,
+              SHOULD_SENDRECV_AV, SHOULD_SENDRECV_AV);
+
+  // Wait for some more data to get written
+  ASSERT_TRUE_WAIT(a1_->GetPacketsSent(0) >= a1PacketsSent + 40 &&
+                   a2_->GetPacketsReceived(0) >= a2PacketsReceived + 40,
+                   kDefaultTimeout * 2);
+
+  ASSERT_TRUE_WAIT(a2_->GetPacketsSent(0) >= a2PacketsSent + 40 &&
+                   a1_->GetPacketsReceived(0) >= a1PacketsReceived + 40,
+                   kDefaultTimeout * 2);
+
+  // Check the low-level media pipeline
+  // for RTP and RTCP flows
+  // The first Local pipeline gets stored at 0
+  a1_->CheckMediaPipeline(0, false, fRtcpMux ?
+    PIPELINE_RTCP_MUX | PIPELINE_SEND :
+    PIPELINE_SEND);
+
+  // The first Remote pipeline gets stored at 0
+  a2_->CheckMediaPipeline(0, false, (fRtcpMux ?  PIPELINE_RTCP_MUX : 0));
+}
+
+TEST_P(SignalingTest, FullCallAudioOnly)
 {
   OfferOptions options;
   OfferAnswer(options, OFFER_AUDIO | ANSWER_AUDIO,
@@ -2541,8 +2974,7 @@ TEST_F(SignalingTest, FullCallAudioOnly)
   ASSERT_TRUE_WAIT(a1_->GetPacketsSent(0) >= 40 &&
                    a2_->GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
 
-  a1_->CloseSendStreams();
-  a2_->CloseReceiveStreams();
+  CloseStreams();
   // Check that we wrote a bunch of data
   ASSERT_GE(a1_->GetPacketsSent(0), 40);
   //ASSERT_GE(a2_->GetPacketsSent(0), 40);
@@ -2552,7 +2984,7 @@ TEST_F(SignalingTest, FullCallAudioOnly)
 
 // FIXME -- reject offered stream by .stop()ing the MST that was offered instead,
 // or by setting .active property to false on the created RTPReceiver object.
-TEST_F(SignalingTest, DISABLED_FullCallAnswererRejectsVideo)
+TEST_P(SignalingTest, DISABLED_FullCallAnswererRejectsVideo)
 {
   OfferOptions offeroptions;
   OfferOptions answeroptions;
@@ -2565,8 +2997,7 @@ TEST_F(SignalingTest, DISABLED_FullCallAnswererRejectsVideo)
   ASSERT_TRUE_WAIT(a1_->GetPacketsSent(0) >= 40 &&
                    a2_->GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
 
-  a1_->CloseSendStreams();
-  a2_->CloseReceiveStreams();
+  CloseStreams();
   // Check that we wrote a bunch of data
   ASSERT_GE(a1_->GetPacketsSent(0), 40);
   //ASSERT_GE(a2_->GetPacketsSent(0), 40);
@@ -2574,7 +3005,7 @@ TEST_F(SignalingTest, DISABLED_FullCallAnswererRejectsVideo)
   ASSERT_GE(a2_->GetPacketsReceived(0), 40);
 }
 
-TEST_F(SignalingTest, FullCallVideoOnly)
+TEST_P(SignalingTest, FullCallVideoOnly)
 {
   OfferOptions options;
   OfferAnswer(options, OFFER_VIDEO | ANSWER_VIDEO,
@@ -2586,8 +3017,7 @@ TEST_F(SignalingTest, FullCallVideoOnly)
   // ASSERT_TRUE_WAIT(a1_->GetPacketsSent(0) >= 40 &&
   //                 a2_->GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
 
-  a1_->CloseSendStreams();
-  a2_->CloseReceiveStreams();
+  CloseStreams();
 
   // FIXME -- Ideally we would check that packets were sent
   // and received; however, the test driver setup does not
@@ -2600,7 +3030,7 @@ TEST_F(SignalingTest, FullCallVideoOnly)
   // ASSERT_GE(a2_->GetPacketsReceived(0), 40);
 }
 
-TEST_F(SignalingTest, OfferAndAnswerWithExtraCodec)
+TEST_P(SignalingTest, OfferAndAnswerWithExtraCodec)
 {
   EnsureInit();
   OfferOptions options;
@@ -2618,11 +3048,10 @@ TEST_F(SignalingTest, OfferAndAnswerWithExtraCodec)
 
   WaitForCompleted();
 
-  a1_->CloseSendStreams();
-  a2_->CloseReceiveStreams();
+  CloseStreams();
 }
 
-TEST_F(SignalingTest, FullCallTrickle)
+TEST_P(SignalingTest, FullCallTrickle)
 {
   OfferOptions options;
   OfferAnswer(options,
@@ -2636,14 +3065,13 @@ TEST_F(SignalingTest, FullCallTrickle)
   ASSERT_TRUE_WAIT(a1_->GetPacketsSent(0) >= 40 &&
                    a2_->GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
 
-  a1_->CloseSendStreams();
-  a2_->CloseReceiveStreams();
+  CloseStreams();
   ASSERT_GE(a1_->GetPacketsSent(0), 40);
   ASSERT_GE(a2_->GetPacketsReceived(0), 40);
 }
 
 // Offer answer with trickle but with chrome-style candidates
-TEST_F(SignalingTest, DISABLED_FullCallTrickleChrome)
+TEST_P(SignalingTest, DISABLED_FullCallTrickleChrome)
 {
   OfferOptions options;
   OfferAnswerTrickleChrome(options,
@@ -2656,13 +3084,12 @@ TEST_F(SignalingTest, DISABLED_FullCallTrickleChrome)
   ASSERT_TRUE_WAIT(a1_->GetPacketsSent(0) >= 40 &&
                    a2_->GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
 
-  a1_->CloseSendStreams();
-  a2_->CloseReceiveStreams();
+  CloseStreams();
   ASSERT_GE(a1_->GetPacketsSent(0), 40);
   ASSERT_GE(a2_->GetPacketsReceived(0), 40);
 }
 
-TEST_F(SignalingTest, FullCallTrickleBeforeSetLocal)
+TEST_P(SignalingTest, FullCallTrickleBeforeSetLocal)
 {
   OfferOptions options;
   Offer(options, OFFER_AV | ANSWER_AV, SHOULD_SENDRECV_AV);
@@ -2682,14 +3109,13 @@ TEST_F(SignalingTest, FullCallTrickleBeforeSetLocal)
   ASSERT_TRUE_WAIT(a1_->GetPacketsSent(0) >= 40 &&
                    a2_->GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
 
-  a1_->CloseSendStreams();
-  a2_->CloseReceiveStreams();
+  CloseStreams();
   ASSERT_GE(a1_->GetPacketsSent(0), 40);
   ASSERT_GE(a2_->GetPacketsReceived(0), 40);
 }
 
 // This test comes from Bug 810220
-TEST_F(SignalingTest, AudioOnlyG711Call)
+TEST_P(SignalingTest, AudioOnlyG711Call)
 {
   EnsureInit();
 
@@ -2720,7 +3146,7 @@ TEST_F(SignalingTest, AudioOnlyG711Call)
 
 }
 
-TEST_F(SignalingTest, IncomingOfferIceLite)
+TEST_P(SignalingTest, IncomingOfferIceLite)
 {
   EnsureInit();
 
@@ -2758,7 +3184,7 @@ TEST_F(SignalingTest, IncomingOfferIceLite)
 }
 
 // This test comes from Bug814038
-TEST_F(SignalingTest, ChromeOfferAnswer)
+TEST_P(SignalingTest, ChromeOfferAnswer)
 {
   EnsureInit();
 
@@ -2839,7 +3265,7 @@ TEST_F(SignalingTest, ChromeOfferAnswer)
 }
 
 
-TEST_F(SignalingTest, FullChromeHandshake)
+TEST_P(SignalingTest, FullChromeHandshake)
 {
   EnsureInit();
 
@@ -2915,7 +3341,7 @@ TEST_F(SignalingTest, FullChromeHandshake)
 // Disabled pending resolution of bug 818640.
 // Actually, this test is completely broken; you can't just call
 // SetRemote/CreateAnswer over and over again.
-TEST_F(SignalingTest, DISABLED_OfferAllDynamicTypes)
+TEST_P(SignalingTest, DISABLED_OfferAllDynamicTypes)
 {
   EnsureInit();
 
@@ -2959,7 +3385,7 @@ TEST_F(SignalingTest, DISABLED_OfferAllDynamicTypes)
 
 }
 
-TEST_F(SignalingTest, ipAddrAnyOffer)
+TEST_P(SignalingTest, ipAddrAnyOffer)
 {
   EnsureInit();
 
@@ -3009,7 +3435,7 @@ static void CreateSDPForBigOTests(std::string& offer, const std::string& number)
     "a=sendrecv\r\n";
 }
 
-TEST_F(SignalingTest, BigOValues)
+TEST_P(SignalingTest, BigOValues)
 {
   EnsureInit();
 
@@ -3021,7 +3447,7 @@ TEST_F(SignalingTest, BigOValues)
   ASSERT_EQ(a2_->pObserver->state, TestObserver::stateSuccess);
 }
 
-TEST_F(SignalingTest, BigOValuesExtraChars)
+TEST_P(SignalingTest, BigOValuesExtraChars)
 {
   EnsureInit();
 
@@ -3036,7 +3462,7 @@ TEST_F(SignalingTest, BigOValuesExtraChars)
   ASSERT_TRUE(a2_->pObserver->state == TestObserver::stateError);
 }
 
-TEST_F(SignalingTest, BigOValuesTooBig)
+TEST_P(SignalingTest, BigOValuesTooBig)
 {
   EnsureInit();
 
@@ -3051,7 +3477,7 @@ TEST_F(SignalingTest, BigOValuesTooBig)
   ASSERT_TRUE(a2_->pObserver->state == TestObserver::stateError);
 }
 
-TEST_F(SignalingTest, SetLocalAnswerInStable)
+TEST_P(SignalingTest, SetLocalAnswerInStable)
 {
   EnsureInit();
 
@@ -3066,7 +3492,7 @@ TEST_F(SignalingTest, SetLocalAnswerInStable)
             PeerConnectionImpl::kInvalidState);
 }
 
-TEST_F(SignalingTest, SetRemoteAnswerInStable) {
+TEST_P(SignalingTest, SetRemoteAnswerInStable) {
   EnsureInit();
 
   // The signaling state will remain "stable" because the
@@ -3077,7 +3503,7 @@ TEST_F(SignalingTest, SetRemoteAnswerInStable) {
             PeerConnectionImpl::kInvalidState);
 }
 
-TEST_F(SignalingTest, SetLocalAnswerInHaveLocalOffer) {
+TEST_P(SignalingTest, SetLocalAnswerInHaveLocalOffer) {
   OfferOptions options;
   CreateOffer(options, OFFER_AUDIO, SHOULD_SENDRECV_AUDIO);
   a1_->SetLocal(TestObserver::OFFER, a1_->offer());
@@ -3092,7 +3518,7 @@ TEST_F(SignalingTest, SetLocalAnswerInHaveLocalOffer) {
             PeerConnectionImpl::kInvalidState);
 }
 
-TEST_F(SignalingTest, SetRemoteOfferInHaveLocalOffer) {
+TEST_P(SignalingTest, SetRemoteOfferInHaveLocalOffer) {
   OfferOptions options;
   CreateOffer(options, OFFER_AUDIO, SHOULD_SENDRECV_AUDIO);
   a1_->SetLocal(TestObserver::OFFER, a1_->offer());
@@ -3107,7 +3533,7 @@ TEST_F(SignalingTest, SetRemoteOfferInHaveLocalOffer) {
             PeerConnectionImpl::kInvalidState);
 }
 
-TEST_F(SignalingTest, SetLocalOfferInHaveRemoteOffer) {
+TEST_P(SignalingTest, SetLocalOfferInHaveRemoteOffer) {
   OfferOptions options;
   CreateOffer(options, OFFER_AUDIO, SHOULD_SENDRECV_AUDIO);
   a2_->SetRemote(TestObserver::OFFER, a1_->offer());
@@ -3122,7 +3548,7 @@ TEST_F(SignalingTest, SetLocalOfferInHaveRemoteOffer) {
             PeerConnectionImpl::kInvalidState);
 }
 
-TEST_F(SignalingTest, SetRemoteAnswerInHaveRemoteOffer) {
+TEST_P(SignalingTest, SetRemoteAnswerInHaveRemoteOffer) {
   OfferOptions options;
   CreateOffer(options, OFFER_AUDIO, SHOULD_SENDRECV_AUDIO);
   a2_->SetRemote(TestObserver::OFFER, a1_->offer());
@@ -3138,7 +3564,7 @@ TEST_F(SignalingTest, SetRemoteAnswerInHaveRemoteOffer) {
 }
 
 // Disabled until the spec adds a failure callback to addStream
-TEST_F(SignalingTest, DISABLED_AddStreamInHaveLocalOffer) {
+TEST_P(SignalingTest, DISABLED_AddStreamInHaveLocalOffer) {
   OfferOptions options;
   CreateOffer(options, OFFER_AUDIO, SHOULD_SENDRECV_AUDIO);
   a1_->SetLocal(TestObserver::OFFER, a1_->offer());
@@ -3150,7 +3576,7 @@ TEST_F(SignalingTest, DISABLED_AddStreamInHaveLocalOffer) {
 }
 
 // Disabled until the spec adds a failure callback to removeStream
-TEST_F(SignalingTest, DISABLED_RemoveStreamInHaveLocalOffer) {
+TEST_P(SignalingTest, DISABLED_RemoveStreamInHaveLocalOffer) {
   OfferOptions options;
   CreateOffer(options, OFFER_AUDIO, SHOULD_SENDRECV_AUDIO);
   a1_->SetLocal(TestObserver::OFFER, a1_->offer());
@@ -3161,7 +3587,7 @@ TEST_F(SignalingTest, DISABLED_RemoveStreamInHaveLocalOffer) {
             PeerConnectionImpl::kInvalidState);
 }
 
-TEST_F(SignalingTest, AddCandidateInHaveLocalOffer) {
+TEST_P(SignalingTest, AddCandidateInHaveLocalOffer) {
   OfferOptions options;
   CreateOffer(options, OFFER_AUDIO, SHOULD_SENDRECV_AUDIO);
   a1_->SetLocal(TestObserver::OFFER, a1_->offer());
@@ -3271,7 +3697,7 @@ TEST_F(SignalingAgentTest, CreateNoInit) {
 /*
  * Test for Bug 843595
  */
-TEST_F(SignalingTest, missingUfrag)
+TEST_P(SignalingTest, missingUfrag)
 {
   EnsureInit();
 
@@ -3325,7 +3751,7 @@ TEST_F(SignalingTest, missingUfrag)
   ASSERT_TRUE(a2_->pObserver->state == TestObserver::stateError);
 }
 
-TEST_F(SignalingTest, AudioOnlyCalleeNoRtcpMux)
+TEST_P(SignalingTest, AudioOnlyCalleeNoRtcpMux)
 {
   EnsureInit();
 
@@ -3352,8 +3778,7 @@ TEST_F(SignalingTest, AudioOnlyCalleeNoRtcpMux)
   ASSERT_TRUE_WAIT(a1_->GetPacketsSent(0) >= 40 &&
                    a2_->GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
 
-  a1_->CloseSendStreams();
-  a2_->CloseReceiveStreams();
+  CloseStreams();
 
   ASSERT_GE(a1_->GetPacketsSent(0), 40);
   ASSERT_GE(a2_->GetPacketsReceived(0), 40);
@@ -3361,15 +3786,13 @@ TEST_F(SignalingTest, AudioOnlyCalleeNoRtcpMux)
   // Check the low-level media pipeline
   // for RTP and RTCP flows
   // The first Local pipeline gets stored at 0
-  a1_->CheckMediaPipeline(0, 0, PIPELINE_LOCAL | PIPELINE_SEND);
-
-  // The first Remote pipeline gets stored at 1
-  a2_->CheckMediaPipeline(0, 0, 0);
+  a1_->CheckMediaPipeline(0, false, PIPELINE_SEND);
+  a2_->CheckMediaPipeline(0, false, 0);
 }
 
 
 
-TEST_F(SignalingTest, AudioOnlyG722Only)
+TEST_P(SignalingTest, AudioOnlyG722Only)
 {
   EnsureInit();
 
@@ -3395,14 +3818,13 @@ TEST_F(SignalingTest, AudioOnlyG722Only)
   ASSERT_TRUE_WAIT(a1_->GetPacketsSent(0) >= 40 &&
                    a2_->GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
 
-  a1_->CloseSendStreams();
-  a2_->CloseReceiveStreams();
+  CloseStreams();
 
   ASSERT_GE(a1_->GetPacketsSent(0), 40);
   ASSERT_GE(a2_->GetPacketsReceived(0), 40);
 }
 
-TEST_F(SignalingTest, AudioOnlyG722MostPreferred)
+TEST_P(SignalingTest, AudioOnlyG722MostPreferred)
 {
   EnsureInit();
 
@@ -3422,11 +3844,10 @@ TEST_F(SignalingTest, AudioOnlyG722MostPreferred)
   ASSERT_NE(a2_->getLocalDescription().find("RTP/SAVPF 9"), std::string::npos);
   ASSERT_NE(a2_->getLocalDescription().find("a=rtpmap:9 G722/8000"), std::string::npos);
 
-  a1_->CloseSendStreams();
-  a2_->CloseReceiveStreams();
+  CloseStreams();
 }
 
-TEST_F(SignalingTest, AudioOnlyG722Rejected)
+TEST_P(SignalingTest, AudioOnlyG722Rejected)
 {
   EnsureInit();
 
@@ -3452,12 +3873,16 @@ TEST_F(SignalingTest, AudioOnlyG722Rejected)
   ASSERT_EQ(a2_->getLocalDescription().find("a=rtpmap:109 opus/48000/2"), std::string::npos);
   ASSERT_EQ(a2_->getLocalDescription().find("a=rtpmap:9 G722/8000"), std::string::npos);
 
-  a1_->CloseSendStreams();
-  a2_->CloseReceiveStreams();
+  CloseStreams();
 }
 
-TEST_F(SignalingTest, FullCallAudioNoMuxVideoMux)
+TEST_P(SignalingTest, FullCallAudioNoMuxVideoMux)
 {
+  if (GetParam() == "bundle") {
+    // This test doesn't make sense for bundle
+    return;
+  }
+
   EnsureInit();
 
   OfferOptions options;
@@ -3487,8 +3912,7 @@ TEST_F(SignalingTest, FullCallAudioNoMuxVideoMux)
   ASSERT_TRUE_WAIT(a1_->GetPacketsSent(0) >= 40 &&
                    a2_->GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
 
-  a1_->CloseSendStreams();
-  a2_->CloseReceiveStreams();
+  CloseStreams();
 
   ASSERT_GE(a1_->GetPacketsSent(0), 40);
   ASSERT_GE(a2_->GetPacketsReceived(0), 40);
@@ -3496,22 +3920,22 @@ TEST_F(SignalingTest, FullCallAudioNoMuxVideoMux)
   // Check the low-level media pipeline
   // for RTP and RTCP flows
   // The first Local pipeline gets stored at 0
-  a1_->CheckMediaPipeline(0, 0, PIPELINE_LOCAL | PIPELINE_SEND);
+  a1_->CheckMediaPipeline(0, false, PIPELINE_SEND);
 
   // Now check video mux.
-  a1_->CheckMediaPipeline(0, 1,
-    PIPELINE_LOCAL | (fRtcpMux ? PIPELINE_RTCP_MUX : 0) | PIPELINE_SEND |
+  a1_->CheckMediaPipeline(0, true,
+    (fRtcpMux ? PIPELINE_RTCP_MUX : 0) | PIPELINE_SEND |
     PIPELINE_VIDEO);
 
   // The first Remote pipeline gets stored at 0
-  a2_->CheckMediaPipeline(0, 0, 0);
+  a2_->CheckMediaPipeline(0, false, 0);
 
   // Now check video mux.
-  a2_->CheckMediaPipeline(0, 1, (fRtcpMux ?  PIPELINE_RTCP_MUX : 0) |
+  a2_->CheckMediaPipeline(0, true, (fRtcpMux ?  PIPELINE_RTCP_MUX : 0) |
     PIPELINE_VIDEO | PIPELINE_RTCP_NACK, VideoSessionConduit::FrameRequestPli);
 }
 
-TEST_F(SignalingTest, RtcpFbInOffer)
+TEST_P(SignalingTest, RtcpFbInOffer)
 {
   EnsureInit();
   OfferOptions options;
@@ -3520,7 +3944,7 @@ TEST_F(SignalingTest, RtcpFbInOffer)
   CheckRtcpFbSdp(a1_->offer(), ARRAY_TO_SET(std::string, expected));
 }
 
-TEST_F(SignalingTest, RtcpFbOfferAll)
+TEST_P(SignalingTest, RtcpFbOfferAll)
 {
   const char *feedbackTypes[] = { "nack", "nack pli", "ccm fir" };
   TestRtcpFbOffer(ARRAY_TO_SET(std::string, feedbackTypes),
@@ -3528,7 +3952,7 @@ TEST_F(SignalingTest, RtcpFbOfferAll)
                   VideoSessionConduit::FrameRequestPli);
 }
 
-TEST_F(SignalingTest, RtcpFbOfferNoNackBasic)
+TEST_P(SignalingTest, RtcpFbOfferNoNackBasic)
 {
   const char *feedbackTypes[] = { "nack pli", "ccm fir" };
   TestRtcpFbOffer(ARRAY_TO_SET(std::string, feedbackTypes),
@@ -3536,7 +3960,7 @@ TEST_F(SignalingTest, RtcpFbOfferNoNackBasic)
                   VideoSessionConduit::FrameRequestPli);
 }
 
-TEST_F(SignalingTest, RtcpFbOfferNoNackPli)
+TEST_P(SignalingTest, RtcpFbOfferNoNackPli)
 {
   const char *feedbackTypes[] = { "nack", "ccm fir" };
   TestRtcpFbOffer(ARRAY_TO_SET(std::string, feedbackTypes),
@@ -3544,7 +3968,7 @@ TEST_F(SignalingTest, RtcpFbOfferNoNackPli)
                   VideoSessionConduit::FrameRequestFir);
 }
 
-TEST_F(SignalingTest, RtcpFbOfferNoCcmFir)
+TEST_P(SignalingTest, RtcpFbOfferNoCcmFir)
 {
   const char *feedbackTypes[] = { "nack", "nack pli" };
   TestRtcpFbOffer(ARRAY_TO_SET(std::string, feedbackTypes),
@@ -3552,7 +3976,7 @@ TEST_F(SignalingTest, RtcpFbOfferNoCcmFir)
                   VideoSessionConduit::FrameRequestPli);
 }
 
-TEST_F(SignalingTest, RtcpFbOfferNoNack)
+TEST_P(SignalingTest, RtcpFbOfferNoNack)
 {
   const char *feedbackTypes[] = { "ccm fir" };
   TestRtcpFbOffer(ARRAY_TO_SET(std::string, feedbackTypes),
@@ -3560,7 +3984,7 @@ TEST_F(SignalingTest, RtcpFbOfferNoNack)
                   VideoSessionConduit::FrameRequestFir);
 }
 
-TEST_F(SignalingTest, RtcpFbOfferNoFrameRequest)
+TEST_P(SignalingTest, RtcpFbOfferNoFrameRequest)
 {
   const char *feedbackTypes[] = { "nack" };
   TestRtcpFbOffer(ARRAY_TO_SET(std::string, feedbackTypes),
@@ -3568,7 +3992,7 @@ TEST_F(SignalingTest, RtcpFbOfferNoFrameRequest)
                   VideoSessionConduit::FrameRequestNone);
 }
 
-TEST_F(SignalingTest, RtcpFbOfferPliOnly)
+TEST_P(SignalingTest, RtcpFbOfferPliOnly)
 {
   const char *feedbackTypes[] = { "nack pli" };
   TestRtcpFbOffer(ARRAY_TO_SET(std::string, feedbackTypes),
@@ -3576,7 +4000,7 @@ TEST_F(SignalingTest, RtcpFbOfferPliOnly)
                   VideoSessionConduit::FrameRequestPli);
 }
 
-TEST_F(SignalingTest, RtcpFbOfferNoFeedback)
+TEST_P(SignalingTest, RtcpFbOfferNoFeedback)
 {
   const char *feedbackTypes[] = { };
   TestRtcpFbOffer(ARRAY_TO_SET(std::string, feedbackTypes),
@@ -3584,7 +4008,7 @@ TEST_F(SignalingTest, RtcpFbOfferNoFeedback)
                   VideoSessionConduit::FrameRequestNone);
 }
 
-TEST_F(SignalingTest, RtcpFbAnswerAll)
+TEST_P(SignalingTest, RtcpFbAnswerAll)
 {
   const char *feedbackTypes[] = { "nack", "nack pli", "ccm fir" };
   TestRtcpFbAnswer(ARRAY_TO_SET(std::string, feedbackTypes),
@@ -3592,7 +4016,7 @@ TEST_F(SignalingTest, RtcpFbAnswerAll)
                   VideoSessionConduit::FrameRequestPli);
 }
 
-TEST_F(SignalingTest, RtcpFbAnswerNoNackBasic)
+TEST_P(SignalingTest, RtcpFbAnswerNoNackBasic)
 {
   const char *feedbackTypes[] = { "nack pli", "ccm fir" };
   TestRtcpFbAnswer(ARRAY_TO_SET(std::string, feedbackTypes),
@@ -3600,7 +4024,7 @@ TEST_F(SignalingTest, RtcpFbAnswerNoNackBasic)
                   VideoSessionConduit::FrameRequestPli);
 }
 
-TEST_F(SignalingTest, RtcpFbAnswerNoNackPli)
+TEST_P(SignalingTest, RtcpFbAnswerNoNackPli)
 {
   const char *feedbackTypes[] = { "nack", "ccm fir" };
   TestRtcpFbAnswer(ARRAY_TO_SET(std::string, feedbackTypes),
@@ -3608,7 +4032,7 @@ TEST_F(SignalingTest, RtcpFbAnswerNoNackPli)
                   VideoSessionConduit::FrameRequestFir);
 }
 
-TEST_F(SignalingTest, RtcpFbAnswerNoCcmFir)
+TEST_P(SignalingTest, RtcpFbAnswerNoCcmFir)
 {
   const char *feedbackTypes[] = { "nack", "nack pli" };
   TestRtcpFbAnswer(ARRAY_TO_SET(std::string, feedbackTypes),
@@ -3616,7 +4040,7 @@ TEST_F(SignalingTest, RtcpFbAnswerNoCcmFir)
                   VideoSessionConduit::FrameRequestPli);
 }
 
-TEST_F(SignalingTest, RtcpFbAnswerNoNack)
+TEST_P(SignalingTest, RtcpFbAnswerNoNack)
 {
   const char *feedbackTypes[] = { "ccm fir" };
   TestRtcpFbAnswer(ARRAY_TO_SET(std::string, feedbackTypes),
@@ -3624,7 +4048,7 @@ TEST_F(SignalingTest, RtcpFbAnswerNoNack)
                   VideoSessionConduit::FrameRequestFir);
 }
 
-TEST_F(SignalingTest, RtcpFbAnswerNoFrameRequest)
+TEST_P(SignalingTest, RtcpFbAnswerNoFrameRequest)
 {
   const char *feedbackTypes[] = { "nack" };
   TestRtcpFbAnswer(ARRAY_TO_SET(std::string, feedbackTypes),
@@ -3632,7 +4056,7 @@ TEST_F(SignalingTest, RtcpFbAnswerNoFrameRequest)
                   VideoSessionConduit::FrameRequestNone);
 }
 
-TEST_F(SignalingTest, RtcpFbAnswerPliOnly)
+TEST_P(SignalingTest, RtcpFbAnswerPliOnly)
 {
   const char *feedbackTypes[] = { "nack pli" };
   TestRtcpFbAnswer(ARRAY_TO_SET(std::string, feedbackTypes),
@@ -3640,7 +4064,7 @@ TEST_F(SignalingTest, RtcpFbAnswerPliOnly)
                   VideoSessionConduit::FrameRequestPli);
 }
 
-TEST_F(SignalingTest, RtcpFbAnswerNoFeedback)
+TEST_P(SignalingTest, RtcpFbAnswerNoFeedback)
 {
   const char *feedbackTypes[] = { };
   TestRtcpFbAnswer(ARRAY_TO_SET(std::string, feedbackTypes),
@@ -3650,7 +4074,7 @@ TEST_F(SignalingTest, RtcpFbAnswerNoFeedback)
 
 // In this test we will change the offer SDP's a=setup value
 // from actpass to passive.  This will make the answer do active.
-TEST_F(SignalingTest, AudioCallForceDtlsRoles)
+TEST_P(SignalingTest, AudioCallForceDtlsRoles)
 {
   EnsureInit();
 
@@ -3690,8 +4114,7 @@ TEST_F(SignalingTest, AudioCallForceDtlsRoles)
   ASSERT_TRUE_WAIT(a1_->GetPacketsSent(0) >= 40 &&
                    a2_->GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
 
-  a1_->CloseSendStreams();
-  a2_->CloseReceiveStreams();
+  CloseStreams();
 
   ASSERT_GE(a1_->GetPacketsSent(0), 40);
   ASSERT_GE(a2_->GetPacketsReceived(0), 40);
@@ -3699,7 +4122,7 @@ TEST_F(SignalingTest, AudioCallForceDtlsRoles)
 
 // In this test we will change the offer SDP's a=setup value
 // from actpass to active.  This will make the answer do passive
-TEST_F(SignalingTest, AudioCallReverseDtlsRoles)
+TEST_P(SignalingTest, AudioCallReverseDtlsRoles)
 {
   EnsureInit();
 
@@ -3739,8 +4162,7 @@ TEST_F(SignalingTest, AudioCallReverseDtlsRoles)
   ASSERT_TRUE_WAIT(a1_->GetPacketsSent(0) >= 40 &&
                    a2_->GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
 
-  a1_->CloseSendStreams();
-  a2_->CloseReceiveStreams();
+  CloseStreams();
 
   ASSERT_GE(a1_->GetPacketsSent(0), 40);
   ASSERT_GE(a2_->GetPacketsReceived(0), 40);
@@ -3749,7 +4171,7 @@ TEST_F(SignalingTest, AudioCallReverseDtlsRoles)
 // In this test we will change the answer SDP's a=setup value
 // from active to passive.  This will make both sides do
 // active and should not connect.
-TEST_F(SignalingTest, AudioCallMismatchDtlsRoles)
+TEST_P(SignalingTest, AudioCallMismatchDtlsRoles)
 {
   EnsureInit();
 
@@ -3787,8 +4209,7 @@ TEST_F(SignalingTest, AudioCallMismatchDtlsRoles)
   // Not using ASSERT_TRUE_WAIT here because we expect failure
   PR_Sleep(kDefaultTimeout * 2); // Wait for some data to get written
 
-  a1_->CloseSendStreams();
-  a2_->CloseReceiveStreams();
+  CloseStreams();
 
   ASSERT_GE(a1_->GetPacketsSent(0), 40);
   // In this case we should receive nothing.
@@ -3798,7 +4219,7 @@ TEST_F(SignalingTest, AudioCallMismatchDtlsRoles)
 // In this test we will change the offer SDP's a=setup value
 // from actpass to garbage.  It should ignore the garbage value
 // and respond with setup:active
-TEST_F(SignalingTest, AudioCallGarbageSetup)
+TEST_P(SignalingTest, AudioCallGarbageSetup)
 {
   EnsureInit();
 
@@ -3837,8 +4258,7 @@ TEST_F(SignalingTest, AudioCallGarbageSetup)
   ASSERT_TRUE_WAIT(a1_->GetPacketsSent(0) >= 40 &&
                    a2_->GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
 
-  a1_->CloseSendStreams();
-  a2_->CloseReceiveStreams();
+  CloseStreams();
 
   ASSERT_GE(a1_->GetPacketsSent(0), 40);
   ASSERT_GE(a2_->GetPacketsReceived(0), 40);
@@ -3846,7 +4266,7 @@ TEST_F(SignalingTest, AudioCallGarbageSetup)
 
 // In this test we will change the offer SDP to remove the
 // a=setup line.  Answer should respond with a=setup:active.
-TEST_F(SignalingTest, AudioCallOfferNoSetupOrConnection)
+TEST_P(SignalingTest, AudioCallOfferNoSetupOrConnection)
 {
   EnsureInit();
 
@@ -3885,8 +4305,7 @@ TEST_F(SignalingTest, AudioCallOfferNoSetupOrConnection)
   ASSERT_TRUE_WAIT(a1_->GetPacketsSent(0) >= 40 &&
                    a2_->GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
 
-  a1_->CloseSendStreams();
-  a2_->CloseReceiveStreams();
+  CloseStreams();
 
   ASSERT_GE(a1_->GetPacketsSent(0), 40);
   ASSERT_GE(a2_->GetPacketsReceived(0), 40);
@@ -3895,7 +4314,7 @@ TEST_F(SignalingTest, AudioCallOfferNoSetupOrConnection)
 // In this test we will change the answer SDP to remove the
 // a=setup line.  ICE should still connect since active will
 // be assumed.
-TEST_F(SignalingTest, AudioCallAnswerNoSetupOrConnection)
+TEST_P(SignalingTest, AudioCallAnswerNoSetupOrConnection)
 {
   EnsureInit();
 
@@ -3933,15 +4352,14 @@ TEST_F(SignalingTest, AudioCallAnswerNoSetupOrConnection)
   ASSERT_TRUE_WAIT(a1_->GetPacketsSent(0) >= 40 &&
                    a2_->GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
 
-  a1_->CloseSendStreams();
-  a2_->CloseReceiveStreams();
+  CloseStreams();
 
   ASSERT_GE(a1_->GetPacketsSent(0), 40);
   ASSERT_GE(a2_->GetPacketsReceived(0), 40);
 }
 
 
-TEST_F(SignalingTest, FullCallRealTrickle)
+TEST_P(SignalingTest, FullCallRealTrickle)
 {
   OfferOptions options;
   OfferAnswer(options, OFFER_AV | ANSWER_AV,
@@ -3951,13 +4369,12 @@ TEST_F(SignalingTest, FullCallRealTrickle)
   ASSERT_TRUE_WAIT(a1_->GetPacketsSent(0) >= 40 &&
                    a2_->GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
 
-  a1_->CloseSendStreams();
-  a2_->CloseReceiveStreams();
+  CloseStreams();
   ASSERT_GE(a1_->GetPacketsSent(0), 40);
   ASSERT_GE(a2_->GetPacketsReceived(0), 40);
 }
 
-TEST_F(SignalingTest, FullCallRealTrickleTestServer)
+TEST_P(SignalingTest, FullCallRealTrickleTestServer)
 {
   SetTestStunServer();
 
@@ -3971,13 +4388,12 @@ TEST_F(SignalingTest, FullCallRealTrickleTestServer)
   ASSERT_TRUE_WAIT(a1_->GetPacketsSent(0) >= 40 &&
                    a2_->GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
 
-  a1_->CloseSendStreams();
-  a2_->CloseReceiveStreams();
+  CloseStreams();
   ASSERT_GE(a1_->GetPacketsSent(0), 40);
   ASSERT_GE(a2_->GetPacketsReceived(0), 40);
 }
 
-TEST_F(SignalingTest, hugeSdp)
+TEST_P(SignalingTest, hugeSdp)
 {
   EnsureInit();
 
@@ -4084,7 +4500,7 @@ TEST_F(SignalingTest, hugeSdp)
 }
 
 // Test max_fs and max_fr prefs have proper impact on SDP offer
-TEST_F(SignalingTest, MaxFsFrInOffer)
+TEST_P(SignalingTest, MaxFsFrInOffer)
 {
   EnsureInit();
 
@@ -4103,7 +4519,7 @@ TEST_F(SignalingTest, MaxFsFrInOffer)
 }
 
 // Test max_fs and max_fr prefs have proper impact on SDP answer
-TEST_F(SignalingTest, MaxFsFrInAnswer)
+TEST_P(SignalingTest, MaxFsFrInAnswer)
 {
   EnsureInit();
 
@@ -4126,7 +4542,7 @@ TEST_F(SignalingTest, MaxFsFrInAnswer)
 }
 
 // Test SDP offer has proper impact on callee's codec configuration
-TEST_F(SignalingTest, MaxFsFrCalleeCodec)
+TEST_P(SignalingTest, MaxFsFrCalleeCodec)
 {
   EnsureInit();
 
@@ -4171,7 +4587,7 @@ TEST_F(SignalingTest, MaxFsFrCalleeCodec)
 }
 
 // Test SDP answer has proper impact on caller's codec configuration
-TEST_F(SignalingTest, MaxFsFrCallerCodec)
+TEST_P(SignalingTest, MaxFsFrCallerCodec)
 {
   EnsureInit();
 
@@ -4213,7 +4629,7 @@ TEST_F(SignalingTest, MaxFsFrCallerCodec)
 }
 
 // Validate offer with multiple video codecs
-TEST_F(SignalingTest, ValidateMultipleVideoCodecsInOffer)
+TEST_P(SignalingTest, ValidateMultipleVideoCodecsInOffer)
 {
   EnsureInit();
   OfferOptions options;
@@ -4245,7 +4661,7 @@ TEST_F(SignalingTest, ValidateMultipleVideoCodecsInOffer)
 }
 
 // Remove VP8 from offer and check that answer negotiates H264 P1 correctly and ignores unknown params
-TEST_F(SignalingTest, RemoveVP8FromOfferWithP1First)
+TEST_P(SignalingTest, RemoveVP8FromOfferWithP1First)
 {
   EnsureInit();
 
@@ -4294,7 +4710,7 @@ TEST_F(SignalingTest, RemoveVP8FromOfferWithP1First)
 }
 
 // Insert H.264 before VP8 in Offer, check answer selects H.264
-TEST_F(SignalingTest, OfferWithH264BeforeVP8)
+TEST_P(SignalingTest, OfferWithH264BeforeVP8)
 {
   EnsureInit();
 
@@ -4357,7 +4773,7 @@ TEST_F(SignalingTest, OfferWithH264BeforeVP8)
 
 #ifdef H264_P0_SUPPORTED
 // Remove H.264 P1 and VP8 from offer, check answer negotiates H.264 P0
-TEST_F(SignalingTest, OfferWithOnlyH264P0)
+TEST_P(SignalingTest, OfferWithOnlyH264P0)
 {
   EnsureInit();
 
@@ -4414,7 +4830,7 @@ TEST_F(SignalingTest, OfferWithOnlyH264P0)
 
 // Test negotiating an answer which has only H.264 P1
 // Which means replace VP8 with H.264 P1 in answer
-TEST_F(SignalingTest, AnswerWithoutVP8)
+TEST_P(SignalingTest, AnswerWithoutVP8)
 {
   EnsureInit();
 
@@ -4478,12 +4894,11 @@ TEST_F(SignalingTest, AnswerWithoutVP8)
 
   WaitForCompleted();
 
-  a1_->CloseSendStreams();
-  a2_->CloseReceiveStreams();
+  CloseStreams();
 }
 
 // Test using a non preferred dynamic video payload type on answer negotiation
-TEST_F(SignalingTest, UseNonPrefferedPayloadTypeOnAnswer)
+TEST_P(SignalingTest, UseNonPrefferedPayloadTypeOnAnswer)
 {
   EnsureInit();
 
@@ -4547,11 +4962,10 @@ TEST_F(SignalingTest, UseNonPrefferedPayloadTypeOnAnswer)
   ASSERT_TRUE_WAIT(a1_->GetPacketsSent(0) >= 40 &&
                    a2_->GetPacketsReceived(0) >= 40, kDefaultTimeout * 2);
 
-  a1_->CloseSendStreams();
-  a2_->CloseReceiveStreams();
+  CloseStreams();
 }
 
-TEST_F(SignalingTest, VideoNegotiationFails)
+TEST_P(SignalingTest, VideoNegotiationFails)
 {
   EnsureInit();
 
@@ -4591,11 +5005,10 @@ TEST_F(SignalingTest, VideoNegotiationFails)
   ASSERT_TRUE_WAIT(a1_->GetPacketsSent(0) >= 10 &&
                    a2_->GetPacketsReceived(0) >= 10, kDefaultTimeout * 2);
 
-  a1_->CloseSendStreams();
-  a2_->CloseReceiveStreams();
+  CloseStreams();
 }
 
-TEST_F(SignalingTest, AudioNegotiationFails)
+TEST_P(SignalingTest, AudioNegotiationFails)
 {
   EnsureInit();
 
@@ -4626,9 +5039,124 @@ TEST_F(SignalingTest, AudioNegotiationFails)
 
   WaitForCompleted();
 
-  a1_->CloseSendStreams();
-  a2_->CloseReceiveStreams();
+  CloseStreams();
 }
+
+TEST_P(SignalingTest, BundleStreamCorrelationBySsrc)
+{
+  if (GetParam() != "bundle") {
+    return;
+  }
+
+  EnsureInit();
+
+  OfferOptions options;
+
+  // We pass DONT_CHECK_AUDIO because we monkey around with payload types
+  a1_->CreateOffer(options, OFFER_AV, DONT_CHECK_AUDIO | SHOULD_SENDRECV_VIDEO);
+  ParsedSDP parsedOffer(a1_->offer());
+
+  // Sabotage unique payload-type matching
+  // TODO(bug 1056650): once we have multistream support, all we need to do
+  // here is run a test with two audio streams, since that will prevent the
+  // PTs from being unique
+  parsedOffer.ReplaceLine("m=audio",
+                          "m=audio 9 RTP/SAVPF 120\r\n");
+  parsedOffer.ReplaceLine("a=rtpmap:109",
+                          "a=rtpmap:120 opus/48000/2\r\n");
+
+  // Sabotage mid-based matching
+  std::string modifiedOffer = parsedOffer.getSdp();
+  size_t midExtStart =
+    modifiedOffer.find("urn:ietf:params:rtp-hdrext:sdes:mid");
+  if (midExtStart != std::string::npos) {
+    // Just garble it a little
+    modifiedOffer[midExtStart] = 'q';
+  }
+
+  a1_->SetLocal(TestObserver::OFFER, modifiedOffer);
+
+  a2_->SetRemote(TestObserver::OFFER, modifiedOffer, false);
+  a2_->CreateAnswer(OFFER_AV|ANSWER_AV,
+                    DONT_CHECK_AUDIO | SHOULD_SENDRECV_VIDEO);
+
+  a2_->SetLocal(TestObserver::ANSWER, a2_->answer(), false);
+
+  ASSERT_EQ(a2_->pObserver->lastStatusCode,
+            PeerConnectionImpl::kNoError);
+
+  a1_->SetRemote(TestObserver::ANSWER, a2_->answer(), false);
+
+  ASSERT_EQ(a1_->pObserver->lastStatusCode,
+            PeerConnectionImpl::kNoError);
+
+  WaitForCompleted();
+
+  // Wait for some data to get written
+  ASSERT_TRUE_WAIT(a1_->GetPacketsSent(0) >= 10 &&
+                   a2_->GetPacketsReceived(0) >= 10, kDefaultTimeout * 2);
+
+  CloseStreams();
+}
+
+TEST_P(SignalingTest, BundleStreamCorrelationByUniquePt)
+{
+  if (GetParam() != "bundle") {
+    return;
+  }
+
+  EnsureInit();
+
+  OfferOptions options;
+
+  a1_->CreateOffer(options, OFFER_AV, SHOULD_SENDRECV_AV);
+  ParsedSDP parsedOffer(a1_->offer());
+
+  std::string modifiedOffer = parsedOffer.getSdp();
+  // Sabotage ssrc matching
+  size_t ssrcStart =
+    modifiedOffer.find("a=ssrc:");
+  ASSERT_NE(std::string::npos, ssrcStart);
+  // Garble
+  modifiedOffer[ssrcStart+2] = 'q';
+
+  // Sabotage mid-based matching
+  size_t midExtStart =
+    modifiedOffer.find("urn:ietf:params:rtp-hdrext:sdes:mid");
+  if (midExtStart != std::string::npos) {
+    // Just garble it a little
+    modifiedOffer[midExtStart] = 'q';
+  }
+
+  a1_->SetLocal(TestObserver::OFFER, modifiedOffer);
+
+  a2_->SetRemote(TestObserver::OFFER, modifiedOffer, false);
+  a2_->CreateAnswer(OFFER_AV|ANSWER_AV,
+                    SHOULD_SENDRECV_AV);
+
+  a2_->SetLocal(TestObserver::ANSWER, a2_->answer(), false);
+
+  ASSERT_EQ(a2_->pObserver->lastStatusCode,
+            PeerConnectionImpl::kNoError);
+
+  a1_->SetRemote(TestObserver::ANSWER, a2_->answer(), false);
+
+  ASSERT_EQ(a1_->pObserver->lastStatusCode,
+            PeerConnectionImpl::kNoError);
+
+  WaitForCompleted();
+
+  // Wait for some data to get written
+  ASSERT_TRUE_WAIT(a1_->GetPacketsSent(0) >= 10 &&
+                   a2_->GetPacketsReceived(0) >= 10, kDefaultTimeout * 2);
+
+  CloseStreams();
+}
+
+INSTANTIATE_TEST_CASE_P(Variants, SignalingTest,
+                        ::testing::Values("bundle",
+                                          "no_bundle",
+                                          "reject_bundle"));
 
 } // End namespace test.
 

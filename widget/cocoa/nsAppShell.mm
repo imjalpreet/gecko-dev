@@ -53,7 +53,7 @@ private:
 
   IOPMAssertionID mAssertionID = kIOPMNullAssertionID;
 
-  NS_IMETHOD Callback(const nsAString& aTopic, const nsAString& aState) {
+  NS_IMETHOD Callback(const nsAString& aTopic, const nsAString& aState) MOZ_OVERRIDE {
     if (!aTopic.EqualsASCII("screen")) {
       return NS_OK;
     }
@@ -115,8 +115,12 @@ static bool gAppShellMethodsSwizzled = false;
   if (expiration) {
     mozilla::HangMonitor::Suspend();
   }
-  return [super nextEventMatchingMask:mask
-          untilDate:expiration inMode:mode dequeue:flag];
+  NSEvent* nextEvent = [super nextEventMatchingMask:mask
+                        untilDate:expiration inMode:mode dequeue:flag];
+  if (expiration) {
+    mozilla::HangMonitor::NotifyActivity();
+  }
+  return nextEvent;
 }
 
 @end
@@ -850,7 +854,7 @@ nsAppShell::AfterProcessNextEvent(nsIThreadInternal *aThread,
     nsIRollupListener* rollupListener = nsBaseWidget::GetActiveRollupListener();
     nsCOMPtr<nsIWidget> rollupWidget = rollupListener->GetRollupWidget();
     if (rollupWidget)
-      rollupListener->Rollup(0, nullptr, nullptr);
+      rollupListener->Rollup(0, true, nullptr, nullptr);
   }
 
   NS_OBJC_END_TRY_ABORT_BLOCK;

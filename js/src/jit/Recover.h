@@ -11,6 +11,7 @@
 
 #include "jsarray.h"
 
+#include "jit/MIR.h"
 #include "jit/Snapshots.h"
 
 struct JSContext;
@@ -37,6 +38,7 @@ namespace jit {
     _(StringLength)                             \
     _(ArgumentsLength)                          \
     _(Floor)                                    \
+    _(Ceil)                                     \
     _(Round)                                    \
     _(CharCodeAt)                               \
     _(FromCharCode)                             \
@@ -56,10 +58,12 @@ namespace jit {
     _(TypeOf)                                   \
     _(ToDouble)                                 \
     _(ToFloat32)                                \
+    _(TruncateToInt32)                          \
     _(NewObject)                                \
     _(NewArray)                                 \
     _(NewDerivedTypedObject)                    \
     _(CreateThisWithTemplate)                   \
+    _(Lambda)                                   \
     _(ObjectState)                              \
     _(ArrayState)
 
@@ -346,6 +350,18 @@ class RFloor MOZ_FINAL : public RInstruction
     bool recover(JSContext *cx, SnapshotIterator &iter) const;
 };
 
+class RCeil MOZ_FINAL : public RInstruction
+{
+  public:
+    RINSTRUCTION_HEADER_(Ceil)
+
+    virtual uint32_t numOperands() const {
+        return 1;
+    }
+
+    bool recover(JSContext *cx, SnapshotIterator &iter) const;
+};
+
 class RRound MOZ_FINAL : public RInstruction
 {
   public:
@@ -462,11 +478,14 @@ class RAtan2 MOZ_FINAL : public RInstruction
 
 class RHypot MOZ_FINAL : public RInstruction
 {
+   private:
+     uint32_t numOperands_;
+
    public:
      RINSTRUCTION_HEADER_(Hypot)
 
      virtual uint32_t numOperands() const {
-         return 2;
+         return numOperands_;
      }
 
      bool recover(JSContext *cx, SnapshotIterator &iter) const;
@@ -583,10 +602,22 @@ class RToFloat32 MOZ_FINAL : public RInstruction
     bool recover(JSContext *cx, SnapshotIterator &iter) const;
 };
 
+class RTruncateToInt32 MOZ_FINAL : public RInstruction
+{
+  public:
+    RINSTRUCTION_HEADER_(TruncateToInt32)
+
+    virtual uint32_t numOperands() const {
+        return 1;
+    }
+
+    bool recover(JSContext *cx, SnapshotIterator &iter) const;
+};
+
 class RNewObject MOZ_FINAL : public RInstruction
 {
   private:
-    bool templateObjectIsClassPrototype_;
+    MNewObject::Mode mode_;
 
   public:
     RINSTRUCTION_HEADER_(NewObject)
@@ -636,6 +667,18 @@ class RCreateThisWithTemplate MOZ_FINAL : public RInstruction
 
     virtual uint32_t numOperands() const {
         return 1;
+    }
+
+    bool recover(JSContext *cx, SnapshotIterator &iter) const;
+};
+
+class RLambda MOZ_FINAL : public RInstruction
+{
+  public:
+    RINSTRUCTION_HEADER_(Lambda)
+
+    virtual uint32_t numOperands() const {
+        return 2;
     }
 
     bool recover(JSContext *cx, SnapshotIterator &iter) const;

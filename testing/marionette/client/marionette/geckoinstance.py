@@ -17,21 +17,22 @@ class GeckoInstance(object):
 
     required_prefs = {"marionette.defaultPrefs.enabled": True,
                       "marionette.logging": True,
-                      "startup.homepage_welcome_url": "about:blank",
-                      "browser.shell.checkDefaultBrowser": False,
-                      "browser.startup.page": 0,
-                      "browser.sessionstore.resume_from_crash": False,
-                      "browser.warnOnQuit": False,
                       "browser.displayedE10SPrompt": 5,
                       "browser.displayedE10SPrompt.1": 5,
                       "browser.displayedE10SPrompt.2": 5,
                       "browser.displayedE10SPrompt.3": 5,
                       "browser.displayedE10SPrompt.4": 5,
+                      "browser.sessionstore.resume_from_crash": False,
+                      "browser.shell.checkDefaultBrowser": False,
+                      "browser.startup.page": 0,
                       "browser.tabs.remote.autostart.1": False,
-                      "browser.tabs.remote.autostart.2": False}
+                      "browser.tabs.remote.autostart.2": False,
+                      "browser.warnOnQuit": False,
+                      "dom.ipc.reportProcessHangs": False,
+                      "startup.homepage_welcome_url": "about:blank"}
 
     def __init__(self, host, port, bin, profile=None, app_args=None, symbols_path=None,
-                  gecko_log=None, prefs=None, ):
+                  gecko_log=None, prefs=None):
         self.marionette_host = host
         self.marionette_port = port
         self.bin = bin
@@ -42,6 +43,9 @@ class GeckoInstance(object):
         else:
             self.profile_path = profile
         self.prefs = prefs
+        self.required_prefs = deepcopy(GeckoInstance.required_prefs)
+        if prefs:
+            self.required_prefs.update(prefs)
         self.app_args = app_args or []
         self.runner = None
         self.symbols_path = symbols_path
@@ -52,6 +56,15 @@ class GeckoInstance(object):
         profile_args["preferences"]["marionette.defaultPrefs.port"] = self.marionette_port
         if self.prefs:
             profile_args["preferences"].update(self.prefs)
+        if '-jsdebugger' in self.app_args:
+            profile_args["preferences"].update({
+                "devtools.browsertoolbox.panel": "jsdebugger",
+                "devtools.debugger.remote-enabled": True,
+                "devtools.debugger.chrome-enabled": True,
+                "devtools.chrome.enabled": True,
+                "devtools.debugger.prompt-connection": False,
+                "marionette.debugging.clicktostart": True,
+            })
 
         if hasattr(self, "profile_path") and self.profile is None:
             if not self.profile_path:
@@ -136,10 +149,25 @@ class GeckoInstance(object):
         self.start()
 
 class B2GDesktopInstance(GeckoInstance):
-    required_prefs = {"focusmanager.testmode": True}
-
-    def __init__(self, **kwargs):
-        super(B2GDesktopInstance, self).__init__(**kwargs)
+    def __init__(self, host, port, bin, **kwargs):
+        # Pass a profile and change the binary to -bin so that
+        # the built-in gaia profile doesn't get touched.
+        if kwargs.get('profile', None) is None:
+            # GeckoInstance.start will clone the profile.
+            kwargs['profile'] = os.path.join(os.path.dirname(bin),
+                                             'gaia',
+                                             'profile')
+        if '-bin' not in os.path.basename(bin):
+            if bin.endswith('.exe'):
+                newbin = bin[:-len('.exe')] + '-bin.exe'
+            else:
+                newbin = bin + '-bin'
+            if os.path.exists(newbin):
+                bin = newbin
+        super(B2GDesktopInstance, self).__init__(host, port, bin, **kwargs)
+        if not self.prefs:
+            self.prefs = {}
+        self.prefs["focusmanager.testmode"] = True
         self.app_args += ['-chrome', 'chrome://b2g/content/shell.html']
 
 class NullOutput(object):

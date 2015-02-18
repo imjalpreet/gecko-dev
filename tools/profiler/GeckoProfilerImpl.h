@@ -278,7 +278,9 @@ static inline void profiler_tracing(const char* aCategory, const char* aInfo,
 // ac_add_options --enable-systace
 //#define MOZ_USE_SYSTRACE
 #ifdef MOZ_USE_SYSTRACE
+#ifndef ATRACE_TAG
 # define ATRACE_TAG ATRACE_TAG_ALWAYS
+#endif
 // We need HAVE_ANDROID_OS to be defined for Trace.h.
 // If its not set we will set it temporary and remove it.
 # ifndef HAVE_ANDROID_OS
@@ -459,5 +461,17 @@ inline void mozilla_sampler_call_exit(void *aHandle)
 }
 
 void mozilla_sampler_add_marker(const char *aMarker, ProfilerMarkerPayload *aPayload);
+
+static inline
+void profiler_log(const char *str)
+{
+  profiler_tracing("log", str, TRACING_EVENT);
+}
+
+static inline
+void profiler_log(const char *fmt, va_list args)
+{
+  mozilla_sampler_log(fmt, args);
+}
 
 #endif /* ndef TOOLS_SPS_SAMPLER_H_ */

@@ -556,7 +556,7 @@ typedef enum sdp_srtp_crypto_suite_t_ {
 
 
 /* Max number of stream ids that can be grouped together */
-#define SDP_MAX_GROUP_STREAM_ID 10
+#define SDP_MAX_MEDIA_STREAMS 32
 
 
 #define SDP_MAGIC_NUM           0xabcdabcd
@@ -838,8 +838,13 @@ typedef struct sdp_stream_data {
     char                      x_confid[SDP_MAX_STRING_LEN+1];
     sdp_group_attr_e          group_attr; /* FID or LS */
     uint16_t                       num_group_id;
-    char *                    group_ids[SDP_MAX_GROUP_STREAM_ID];
+    char *                    group_ids[SDP_MAX_MEDIA_STREAMS];
 } sdp_stream_data_t;
+
+typedef struct sdp_msid_semantic {
+    char semantic[SDP_MAX_STRING_LEN+1];
+    char * msids[SDP_MAX_MEDIA_STREAMS];
+} sdp_msid_semantic_t;
 
 /*
  * a=source-filter:<filter-mode> <filter-spec>
@@ -919,6 +924,10 @@ typedef struct sdp_extmap {
     char             extension_attributes[SDP_MAX_STRING_LEN+1];
 } sdp_extmap_t;
 
+typedef struct sdp_ssrc {
+    uint32_t ssrc;
+    char     attribute[SDP_MAX_STRING_LEN + 1];
+} sdp_ssrc_t;
 
 /*
  * sdp_srtp_crypto_context_t
@@ -1005,12 +1014,14 @@ typedef struct sdp_attr {
         sdp_srtp_crypto_context_t srtp_context;
         sdp_mptime_t          mptime;
         sdp_stream_data_t     stream_data;
+        sdp_msid_semantic_t   msid_semantic;
         char                  unknown[SDP_MAX_STRING_LEN+1];
         sdp_source_filter_t   source_filter;
         sdp_fmtp_fb_t         rtcp_fb;
         sdp_setup_type_e      setup;
         sdp_connection_type_e connection;
         sdp_extmap_t          extmap;
+        sdp_ssrc_t            ssrc;
     } attr;
     struct sdp_attr          *next_p;
 } sdp_attr_t;

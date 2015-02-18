@@ -37,6 +37,9 @@ public:
 
   virtual nsresult Init(MediaDecoderReader* aCloneDonor) MOZ_OVERRIDE;
 
+  virtual size_t SizeOfVideoQueueInFrames() MOZ_OVERRIDE;
+  virtual size_t SizeOfAudioQueueInFrames() MOZ_OVERRIDE;
+
   virtual nsRefPtr<VideoDataPromise>
   RequestVideoData(bool aSkipToNextKeyframe, int64_t aTimeThreshold) MOZ_OVERRIDE;
 
@@ -56,10 +59,7 @@ public:
   virtual void ReadUpdatedMetadata(MediaInfo* aInfo) MOZ_OVERRIDE;
 
   virtual nsRefPtr<SeekPromise>
-  Seek(int64_t aTime,
-       int64_t aStartTime,
-       int64_t aEndTime,
-       int64_t aCurrentTime) MOZ_OVERRIDE;
+  Seek(int64_t aTime, int64_t aEndTime) MOZ_OVERRIDE;
 
   virtual bool IsMediaSeekable() MOZ_OVERRIDE;
 
@@ -79,8 +79,11 @@ public:
 
   virtual nsRefPtr<ShutdownPromise> Shutdown() MOZ_OVERRIDE;
 
+  virtual bool IsAsync() const MOZ_OVERRIDE { return true; }
+
 private:
 
+  bool InitDemuxer();
   void ReturnOutput(MediaData* aData, TrackType aTrack);
 
   // Sends input to decoder for aTrack, and output to the state machine,
@@ -99,6 +102,7 @@ private:
   // Blocks until the demuxer produces an sample of specified type.
   // Returns nullptr on error on EOS. Caller must delete sample.
   mp4_demuxer::MP4Sample* PopSample(mp4_demuxer::TrackType aTrack);
+  mp4_demuxer::MP4Sample* PopSampleLocked(mp4_demuxer::TrackType aTrack);
 
   bool SkipVideoDemuxToNextKeyFrame(int64_t aTimeThreshold, uint32_t& parsed);
 
@@ -117,8 +121,14 @@ private:
   bool IsWaitingOnCodecResource();
   virtual bool IsWaitingOnCDMResource() MOZ_OVERRIDE;
 
+  Microseconds GetNextKeyframeTime();
+  bool ShouldSkip(bool aSkipToNextKeyframe, int64_t aTimeThreshold);
+
+  size_t SizeOfQueue(TrackType aTrack);
+
+  nsRefPtr<MP4Stream> mStream;
   nsAutoPtr<mp4_demuxer::MP4Demuxer> mDemuxer;
-  nsAutoPtr<PlatformDecoderModule> mPlatform;
+  nsRefPtr<PlatformDecoderModule> mPlatform;
 
   class DecoderCallback : public MediaDataDecoderCallback {
   public:
@@ -175,7 +185,7 @@ private:
     nsRefPtr<MediaDataDecoder> mDecoder;
     // TaskQueue on which decoder can choose to decode.
     // Only non-null up until the decoder is created.
-    nsRefPtr<MediaTaskQueue> mTaskQueue;
+    nsRefPtr<FlushableMediaTaskQueue> mTaskQueue;
     // Callback that receives output and error notifications from the decoder.
     nsAutoPtr<DecoderCallback> mCallback;
     // Decoded samples returned my mDecoder awaiting being returned to
@@ -250,12 +260,19 @@ private:
   // True if we've read the streams' metadata.
   bool mDemuxerInitialized;
 
+  // True if we've gathered telemetry from an SPS.
+  bool mFoundSPSForTelemetry;
+
   // Synchronized by decoder monitor.
   bool mIsEncrypted;
 
   bool mIndexReady;
-  Monitor mIndexMonitor;
+  Monitor mDemuxerMonitor;
   nsRefPtr<SharedDecoderManager> mSharedDecoderManager;
+
+#if defined(XP_WIN)
+  const bool mDormantEnabled;
+#endif
 };
 
 } // namespace mozilla

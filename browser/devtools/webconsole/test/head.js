@@ -319,8 +319,7 @@ let finishTest = Task.async(function* () {
   finish();
 });
 
-function tearDown()
-{
+registerCleanupFunction(function*() {
   gDevTools.testing = false;
 
   dumpConsoles();
@@ -330,14 +329,12 @@ function tearDown()
   }
 
   let target = TargetFactory.forTab(gBrowser.selectedTab);
-  gDevTools.closeToolbox(target);
+  yield gDevTools.closeToolbox(target);
 
   while (gBrowser.tabs.length > 1) {
     gBrowser.removeCurrentTab();
   }
-}
-
-registerCleanupFunction(tearDown);
+});
 
 waitForExplicitFinish();
 
@@ -1120,6 +1117,14 @@ function waitForMessages(aOptions)
     return true;
   }
 
+  function hasXhrLabel(aElement) {
+    let xhr = aElement.querySelector('.xhr');
+    if (!xhr) {
+      return false;
+    }
+    return true;
+  }
+
   function checkMessage(aRule, aElement)
   {
     let elemText = aElement.textContent;
@@ -1161,6 +1166,14 @@ function waitForMessages(aOptions)
     }
 
     if ("collapsible" in aRule && !checkCollapsible(aRule, aElement)) {
+      return false;
+    }
+
+    if (aRule.isXhr && !hasXhrLabel(aElement)) {
+      return false;
+    }
+
+    if (!aRule.isXhr && hasXhrLabel(aElement)) {
       return false;
     }
 

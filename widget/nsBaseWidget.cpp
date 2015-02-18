@@ -4,6 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/ArrayUtils.h"
+#include "mozilla/TextEventDispatcher.h"
 
 #include "mozilla/layers/CompositorChild.h"
 #include "mozilla/layers/CompositorParent.h"
@@ -43,9 +44,16 @@
 #include "mozilla/MouseEvents.h"
 #include "GLConsts.h"
 #include "mozilla/unused.h"
+#include "mozilla/VsyncDispatcher.h"
 #include "mozilla/layers/APZCTreeManager.h"
+#include "mozilla/layers/APZEventState.h"
+#include "mozilla/layers/APZThreadUtils.h"
 #include "mozilla/layers/ChromeProcessController.h"
-
+#include "mozilla/layers/InputAPZContext.h"
+#include "mozilla/layers/APZCCallbackHelper.h"
+#include "mozilla/dom/TabParent.h"
+#include "nsRefPtrHashtable.h"
+#include "TouchEvents.h"
 #ifdef ACCESSIBILITY
 #include "nsAccessibilityService.h"
 #endif
@@ -65,10 +73,14 @@ static int32_t gNumWidgets;
 #include "nsCocoaFeatures.h"
 #endif
 
+#if defined(XP_WIN) || defined(MOZ_WIDGET_GTK)
+static nsRefPtrHashtable<nsVoidPtrHashKey, nsIWidget>* sPluginWidgetList;
+#endif
 nsIRollupListener* nsBaseWidget::gRollupListener = nullptr;
 
 using namespace mozilla::layers;
 using namespace mozilla::ipc;
+using namespace mozilla::widget;
 using namespace mozilla;
 using base::Thread;
 
@@ -110,7 +122,7 @@ nsAutoRollup::~nsAutoRollup()
 nsBaseWidget::nsBaseWidget()
 : mWidgetListener(nullptr)
 , mAttachedWidgetListener(nullptr)
-, mContext(nullptr)
+, mCompositorVsyncDispatcher(nullptr)
 , mCursor(eCursor_standard)
 , mUpdateCursor(true)
 , mBorderStyle(eBorderStyle_none)
@@ -118,7 +130,6 @@ nsBaseWidget::nsBaseWidget()
 , mForceLayersAcceleration(false)
 , mTemporarilyUseBasicLayerManager(false)
 , mUseAttachedEvents(false)
-, mContextInitialized(false)
 , mBounds(0,0,0,0)
 , mOriginalBounds(nullptr)
 , mClipRectCount(0)
@@ -135,6 +146,11 @@ nsBaseWidget::nsBaseWidget()
   debug_RegisterPrefCallbacks();
 #endif
 
+#if defined(XP_WIN) || defined(MOZ_WIDGET_GTK)
+  if (!sPluginWidgetList) {
+    sPluginWidgetList = new nsRefPtrHashtable<nsVoidPtrHashKey, nsIWidget>();
+  }
+#endif
   mShutdownObserver = new WidgetShutdownObserver(this);
   nsContentUtils::RegisterShutdownObserver(mShutdownObserver);
 }
@@ -148,6 +164,12 @@ WidgetShutdownObserver::Observe(nsISupports *aSubject,
 {
   if (strcmp(aTopic, NS_XPCOM_SHUTDOWN_OBSERVER_ID) == 0 &&
       mWidget) {
+#if defined(XP_WIN) || defined(MOZ_WIDGET_GTK)
+    if (sPluginWidgetList) {
+      delete sPluginWidgetList;
+      sPluginWidgetList = nullptr;
+    }
+#endif
     mWidget->Shutdown();
     nsContentUtils::UnregisterShutdownObserver(this);
   }
@@ -227,10 +249,13 @@ nsBaseWidget::~nsBaseWidget()
   printf("WIDGETS- = %d\n", gNumWidgets);
 #endif
 
-  NS_IF_RELEASE(mContext);
   delete mOriginalBounds;
-}
 
+  // Can have base widgets that are things like tooltips which don't have CompositorVsyncDispatchers
+  if (mCompositorVsyncDispatcher) {
+    mCompositorVsyncDispatcher->Shutdown();
+  }
+}
 
 //-------------------------------------------------------------------------
 //
@@ -239,7 +264,6 @@ nsBaseWidget::~nsBaseWidget()
 //-------------------------------------------------------------------------
 void nsBaseWidget::BaseCreate(nsIWidget *aParent,
                               const nsIntRect &aRect,
-                              nsDeviceContext *aContext,
                               nsWidgetInitData *aInitData)
 {
   static bool gDisableNativeThemeCached = false;
@@ -251,16 +275,6 @@ void nsBaseWidget::BaseCreate(nsIWidget *aParent,
   }
 
   // keep a reference to the device context
-  if (aContext) {
-    mContext = aContext;
-    NS_ADDREF(mContext);
-  }
-  else {
-    mContext = new nsDeviceContext();
-    NS_ADDREF(mContext);
-    mContext->Init(nullptr);
-  }
-
   if (nullptr != aInitData) {
     mWindowType = aInitData->mWindowType;
     mBorderStyle = aInitData->mBorderStyle;
@@ -297,7 +311,6 @@ void nsBaseWidget::SetWidgetListener(nsIWidgetListener* aWidgetListener)
 
 already_AddRefed<nsIWidget>
 nsBaseWidget::CreateChild(const nsIntRect  &aRect,
-                          nsDeviceContext *aContext,
                           nsWidgetInitData *aInitData,
                           bool             aForceUseIWidgetParent)
 {
@@ -310,7 +323,7 @@ nsBaseWidget::CreateChild(const nsIntRect  &aRect,
     // nativeWidget parameter.
     nativeParent = parent ? parent->GetNativeData(NS_NATIVE_WIDGET) : nullptr;
     parent = nativeParent ? nullptr : parent;
-    NS_ABORT_IF_FALSE(!parent || !nativeParent, "messed up logic");
+    MOZ_ASSERT(!parent || !nativeParent, "messed up logic");
   }
 
   nsCOMPtr<nsIWidget> widget;
@@ -322,8 +335,7 @@ nsBaseWidget::CreateChild(const nsIntRect  &aRect,
   }
 
   if (widget &&
-      NS_SUCCEEDED(widget->Create(parent, nativeParent, aRect,
-                                  aContext, aInitData))) {
+      NS_SUCCEEDED(widget->Create(parent, nativeParent, aRect, aInitData))) {
     return widget.forget();
   }
 
@@ -332,8 +344,7 @@ nsBaseWidget::CreateChild(const nsIntRect  &aRect,
 
 // Attach a view to our widget which we'll send events to.
 NS_IMETHODIMP
-nsBaseWidget::AttachViewToTopLevel(bool aUseAttachedEvents,
-                                   nsDeviceContext *aContext)
+nsBaseWidget::AttachViewToTopLevel(bool aUseAttachedEvents)
 {
   NS_ASSERTION((mWindowType == eWindowType_toplevel ||
                 mWindowType == eWindowType_dialog ||
@@ -342,14 +353,6 @@ nsBaseWidget::AttachViewToTopLevel(bool aUseAttachedEvents,
                "Can't attach to window of that type");
 
   mUseAttachedEvents = aUseAttachedEvents;
-
-  if (aContext) {
-    if (mContext) {
-      NS_IF_RELEASE(mContext);
-    }
-    mContext = aContext;
-    NS_ADDREF(mContext);
-  }
 
   return NS_OK;
 }
@@ -637,18 +640,21 @@ nsTransparencyMode nsBaseWidget::GetTransparencyMode() {
 }
 
 bool
+nsBaseWidget::IsWindowClipRegionEqual(const nsTArray<nsIntRect>& aRects)
+{
+  return mClipRects &&
+         mClipRectCount == aRects.Length() &&
+         memcmp(mClipRects, aRects.Elements(), sizeof(nsIntRect)*mClipRectCount) == 0;
+}
+
+void
 nsBaseWidget::StoreWindowClipRegion(const nsTArray<nsIntRect>& aRects)
 {
-  if (mClipRects && mClipRectCount == aRects.Length() &&
-      memcmp(mClipRects, aRects.Elements(), sizeof(nsIntRect)*mClipRectCount) == 0)
-    return false;
-
   mClipRectCount = aRects.Length();
   mClipRects = new nsIntRect[mClipRectCount];
   if (mClipRects) {
     memcpy(mClipRects, aRects.Elements(), sizeof(nsIntRect)*mClipRectCount);
   }
-  return true;
 }
 
 void
@@ -685,16 +691,8 @@ nsBaseWidget::SetWindowClipRegion(const nsTArray<nsIntRect>& aRects,
                                   bool aIntersectWithExisting)
 {
   if (!aIntersectWithExisting) {
-    nsBaseWidget::StoreWindowClipRegion(aRects);
+    StoreWindowClipRegion(aRects);
   } else {
-    // In this case still early return if nothing changed.
-    if (mClipRects && mClipRectCount == aRects.Length() &&
-        memcmp(mClipRects,
-               aRects.Elements(),
-               sizeof(nsIntRect)*mClipRectCount) == 0) {
-      return NS_OK;
-    }
-
     // get current rects
     nsTArray<nsIntRect> currentRects;
     GetWindowClipRegion(&currentRects);
@@ -709,7 +707,7 @@ nsBaseWidget::SetWindowClipRegion(const nsTArray<nsIntRect>& aRects,
     nsTArray<nsIntRect> rects;
     ArrayFromRegion(intersection, rects);
     // store
-    nsBaseWidget::StoreWindowClipRegion(rects);
+    StoreWindowClipRegion(rects);
   }
   return NS_OK;
 }
@@ -916,9 +914,46 @@ void nsBaseWidget::CreateCompositor()
 already_AddRefed<GeckoContentController>
 nsBaseWidget::CreateRootContentController()
 {
-  nsRefPtr<GeckoContentController> controller = new ChromeProcessController();
+  nsRefPtr<GeckoContentController> controller = new ChromeProcessController(this, mAPZEventState);
   return controller.forget();
 }
+
+class ChromeProcessSetTargetAPZCCallback : public SetTargetAPZCCallback {
+public:
+  explicit ChromeProcessSetTargetAPZCCallback(APZCTreeManager* aTreeManager)
+    : mTreeManager(aTreeManager)
+  {}
+
+  void Run(uint64_t aInputBlockId, const nsTArray<ScrollableLayerGuid>& aTargets) const MOZ_OVERRIDE {
+    MOZ_ASSERT(NS_IsMainThread());
+    // need a local var to disambiguate between the SetTargetAPZC overloads.
+    void (APZCTreeManager::*setTargetApzcFunc)(uint64_t, const nsTArray<ScrollableLayerGuid>&)
+        = &APZCTreeManager::SetTargetAPZC;
+    APZThreadUtils::RunOnControllerThread(NewRunnableMethod(
+        mTreeManager.get(), setTargetApzcFunc, aInputBlockId, aTargets));
+  }
+
+private:
+  nsRefPtr<APZCTreeManager> mTreeManager;
+};
+
+class ChromeProcessContentReceivedInputBlockCallback : public ContentReceivedInputBlockCallback {
+public:
+  explicit ChromeProcessContentReceivedInputBlockCallback(APZCTreeManager* aTreeManager)
+    : mTreeManager(aTreeManager)
+  {}
+
+  void Run(const ScrollableLayerGuid& aGuid, uint64_t aInputBlockId, bool aPreventDefault) const MOZ_OVERRIDE {
+    MOZ_ASSERT(NS_IsMainThread());
+    APZThreadUtils::RunOnControllerThread(NewRunnableMethod(
+        mTreeManager.get(), &APZCTreeManager::ContentReceivedInputBlock,
+        aInputBlockId, aPreventDefault));
+  }
+
+private:
+  nsRefPtr<APZCTreeManager> mTreeManager;
+};
+
 
 void nsBaseWidget::ConfigureAPZCTreeManager()
 {
@@ -927,11 +962,57 @@ void nsBaseWidget::ConfigureAPZCTreeManager()
   MOZ_ASSERT(mAPZC);
 
   mAPZC->SetDPI(GetDPI());
+  mAPZEventState = new APZEventState(this,
+      new ChromeProcessContentReceivedInputBlockCallback(mAPZC));
+  mSetTargetAPZCCallback = new ChromeProcessSetTargetAPZCCallback(mAPZC);
 
   nsRefPtr<GeckoContentController> controller = CreateRootContentController();
   if (controller) {
     CompositorParent::SetControllerForLayerTree(rootLayerTreeId, controller);
   }
+}
+
+nsEventStatus
+nsBaseWidget::DispatchEventForAPZ(WidgetGUIEvent* aEvent,
+                                  const ScrollableLayerGuid& aGuid,
+                                  uint64_t aInputBlockId)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  InputAPZContext context(aGuid, aInputBlockId);
+
+  // If this is a touch event and APZ has targeted it to an APZC in the root
+  // process, apply that APZC's callback-transform before dispatching the
+  // event. If the event is instead targeted to an APZC in the child process,
+  // the transform will be applied in the child process before dispatching
+  // the event there (see e.g. TabChild::RecvRealTouchEvent()).
+  // TODO: Do other types of events (than touch) need this?
+  if (aEvent->AsTouchEvent() && aGuid.mLayersId == mCompositorParent->RootLayerTreeId()) {
+    APZCCallbackHelper::ApplyCallbackTransform(*aEvent->AsTouchEvent(), aGuid,
+        GetDefaultScale(), 1.0f);
+  }
+
+  nsEventStatus status;
+  DispatchEvent(aEvent, status);
+
+  if (mAPZC && !context.WasRoutedToChildProcess()) {
+    // EventStateManager did not route the event into the child process.
+    // It's safe to communicate to APZ that the event has been processed.
+    // TODO: Eventually we'll be able to move the SendSetTargetAPZCNotification
+    // call into APZEventState::Process*Event() as well.
+    if (WidgetTouchEvent* touchEvent = aEvent->AsTouchEvent()) {
+      if (touchEvent->message == NS_TOUCH_START) {
+        APZCCallbackHelper::SendSetTargetAPZCNotification(this, GetDocument(), *aEvent,
+            aGuid, aInputBlockId, mSetTargetAPZCCallback);
+      }
+      mAPZEventState->ProcessTouchEvent(*touchEvent, aGuid, aInputBlockId);
+    } else if (WidgetWheelEvent* wheelEvent = aEvent->AsWheelEvent()) {
+      APZCCallbackHelper::SendSetTargetAPZCNotification(this, GetDocument(), *aEvent,
+                aGuid, aInputBlockId, mSetTargetAPZCCallback);
+      mAPZEventState->ProcessWheelEvent(*wheelEvent, aGuid, aInputBlockId);
+    }
+  }
+
+  return status;
 }
 
 void
@@ -942,6 +1023,35 @@ nsBaseWidget::GetPreferredCompositorBackends(nsTArray<LayersBackend>& aHints)
   }
 
   aHints.AppendElement(LayersBackend::LAYERS_BASIC);
+}
+
+nsIDocument*
+nsBaseWidget::GetDocument() const
+{
+  if (mWidgetListener) {
+    if (nsIPresShell* presShell = mWidgetListener->GetPresShell()) {
+      return presShell->GetDocument();
+    }
+  }
+  return nullptr;
+}
+
+void nsBaseWidget::CreateCompositorVsyncDispatcher()
+{
+  if (gfxPrefs::HardwareVsyncEnabled()) {
+    // Parent directly listens to the vsync source whereas
+    // child process communicate via IPC
+    // Should be called AFTER gfxPlatform is initialized
+    if (XRE_IsParentProcess()) {
+      mCompositorVsyncDispatcher = new CompositorVsyncDispatcher();
+    }
+  }
+}
+
+CompositorVsyncDispatcher*
+nsBaseWidget::GetCompositorVsyncDispatcher()
+{
+  return mCompositorVsyncDispatcher;
 }
 
 void nsBaseWidget::CreateCompositor(int aWidth, int aHeight)
@@ -961,6 +1071,7 @@ void nsBaseWidget::CreateCompositor(int aWidth, int aHeight)
     return;
   }
 
+  CreateCompositorVsyncDispatcher();
   mCompositorParent = NewCompositorParent(aWidth, aHeight);
   MessageChannel *parentChannel = mCompositorParent->GetIPCChannel();
   nsRefPtr<ClientLayerManager> lm = new ClientLayerManager(this);
@@ -968,7 +1079,8 @@ void nsBaseWidget::CreateCompositor(int aWidth, int aHeight)
   mCompositorChild = new CompositorChild(lm);
   mCompositorChild->Open(parentChannel, childMessageLoop, ipc::ChildSide);
 
-  if (gfxPrefs::AsyncPanZoomEnabled()) {
+  if (gfxPrefs::AsyncPanZoomEnabled() &&
+      (WindowType() == eWindowType_toplevel || WindowType() == eWindowType_child)) {
     ConfigureAPZCTreeManager();
   }
 
@@ -1070,27 +1182,16 @@ TemporaryRef<mozilla::gfx::DrawTarget> nsBaseWidget::StartRemoteDrawing()
 
 //-------------------------------------------------------------------------
 //
-// Return the used device context
-//
-//-------------------------------------------------------------------------
-nsDeviceContext* nsBaseWidget::GetDeviceContext()
-{
-  if (!mContextInitialized) {
-    mContext->Init(this);
-    mContextInitialized = true;
-  }
-  return mContext;
-}
-
-//-------------------------------------------------------------------------
-//
 // Destroy the window
 //
 //-------------------------------------------------------------------------
 void nsBaseWidget::OnDestroy()
 {
-  // release references to device context and app shell
-  NS_IF_RELEASE(mContext);
+  if (mTextEventDispatcher) {
+    mTextEventDispatcher->OnDestroyWidget();
+    // Don't release it until this widget actually released because after this
+    // is called, TextEventDispatcher() may create it again.
+  }
 }
 
 NS_METHOD nsBaseWidget::SetWindowClass(const nsAString& xulWinType)
@@ -1514,20 +1615,51 @@ void
 nsBaseWidget::NotifyUIStateChanged(UIStateChangeType aShowAccelerators,
                                    UIStateChangeType aShowFocusRings)
 {
-  if (!mWidgetListener)
-    return;
-
-  nsIPresShell* presShell = mWidgetListener->GetPresShell();
-  if (!presShell)
-    return;
-
-  nsIDocument* doc = presShell->GetDocument();
-  if (doc) {
+  if (nsIDocument* doc = GetDocument()) {
     nsPIDOMWindow* win = doc->GetWindow();
     if (win) {
       win->SetKeyboardIndicators(aShowAccelerators, aShowFocusRings);
     }
   }
+}
+
+NS_IMETHODIMP
+nsBaseWidget::NotifyIME(const IMENotification& aIMENotification)
+{
+  switch (aIMENotification.mMessage) {
+    case REQUEST_TO_COMMIT_COMPOSITION:
+    case REQUEST_TO_CANCEL_COMPOSITION:
+      // Currently, if native IME handler doesn't use TextEventDispatcher,
+      // the request may be notified to mTextEventDispatcher or native IME
+      // directly.  Therefore, if mTextEventDispatcher has a composition,
+      // the request should be handled by the mTextEventDispatcher.
+      if (mTextEventDispatcher && mTextEventDispatcher->IsComposing()) {
+        return mTextEventDispatcher->NotifyIME(aIMENotification);
+      }
+      // Otherwise, it should be handled by native IME.
+      return NotifyIMEInternal(aIMENotification);
+    case NOTIFY_IME_OF_FOCUS:
+    case NOTIFY_IME_OF_BLUR:
+      // If the notification is a notification which is supported by
+      // nsITextInputProcessorCallback, we should notify the
+      // TextEventDispatcher, first.  After that, notify native IME too.
+      if (mTextEventDispatcher) {
+        mTextEventDispatcher->NotifyIME(aIMENotification);
+      }
+      return NotifyIMEInternal(aIMENotification);
+    default:
+      // Otherwise, notify only native IME for now.
+      return NotifyIMEInternal(aIMENotification);
+  }
+}
+
+NS_IMETHODIMP_(nsIWidget::TextEventDispatcher*)
+nsBaseWidget::GetTextEventDispatcher()
+{
+  if (!mTextEventDispatcher) {
+    mTextEventDispatcher = new TextEventDispatcher(this);
+  }
+  return mTextEventDispatcher;
 }
 
 #ifdef ACCESSIBILITY
@@ -1652,6 +1784,88 @@ nsIWidget::ClearNativeTouchSequence()
                              mLongTapTouchPoint->mPosition, 0, 0);
   mLongTapTouchPoint = nullptr;
   return NS_OK;
+}
+
+void
+nsBaseWidget::RegisterPluginWindowForRemoteUpdates()
+{
+#if !defined(XP_WIN) && !defined(MOZ_WIDGET_GTK)
+  NS_NOTREACHED("nsBaseWidget::RegisterPluginWindowForRemoteUpdates not implemented!");
+  return;
+#else
+  MOZ_ASSERT(NS_IsMainThread());
+  void* id = GetNativeData(NS_NATIVE_PLUGIN_ID);
+  if (!id) {
+    NS_WARNING("This is not a valid native widget!");
+    return;
+  }
+  MOZ_ASSERT(sPluginWidgetList);
+  sPluginWidgetList->Put(id, this);
+#endif
+}
+
+void
+nsBaseWidget::UnregisterPluginWindowForRemoteUpdates()
+{
+#if !defined(XP_WIN) && !defined(MOZ_WIDGET_GTK)
+  NS_NOTREACHED("nsBaseWidget::UnregisterPluginWindowForRemoteUpdates not implemented!");
+  return;
+#else
+  MOZ_ASSERT(NS_IsMainThread());
+  void* id = GetNativeData(NS_NATIVE_PLUGIN_ID);
+  if (!id) {
+    NS_WARNING("This is not a valid native widget!");
+    return;
+  }
+  MOZ_ASSERT(sPluginWidgetList);
+  sPluginWidgetList->Remove(id);
+#endif
+}
+
+// static
+nsIWidget*
+nsIWidget::LookupRegisteredPluginWindow(uintptr_t aWindowID)
+{
+#if !defined(XP_WIN) && !defined(MOZ_WIDGET_GTK)
+  NS_NOTREACHED("nsBaseWidget::LookupRegisteredPluginWindow not implemented!");
+  return nullptr;
+#else
+  MOZ_ASSERT(NS_IsMainThread());
+  nsIWidget* widget = nullptr;
+  MOZ_ASSERT(sPluginWidgetList);
+  sPluginWidgetList->Get((void*)aWindowID, &widget);
+  return widget;
+#endif
+}
+
+#if defined(XP_WIN) || defined(MOZ_WIDGET_GTK)
+static PLDHashOperator
+RegisteredPluginEnumerator(const void* aWindowId, nsIWidget* aWidget, void* aUserArg)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(aWindowId);
+  MOZ_ASSERT(aWidget);
+  MOZ_ASSERT(aUserArg);
+  const nsTArray<uintptr_t>* visible = static_cast<const nsTArray<uintptr_t>*>(aUserArg);
+  if (!visible->Contains((uintptr_t)aWindowId) && !aWidget->Destroyed()) {
+    aWidget->Show(false);
+  }
+  return PLDHashOperator::PL_DHASH_NEXT;
+}
+#endif
+
+// static
+void
+nsIWidget::UpdateRegisteredPluginWindowVisibility(nsTArray<uintptr_t>& aVisibleList)
+{
+#if !defined(XP_WIN) && !defined(MOZ_WIDGET_GTK)
+  NS_NOTREACHED("nsBaseWidget::UpdateRegisteredPluginWindowVisibility not implemented!");
+  return;
+#else
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(sPluginWidgetList);
+  sPluginWidgetList->EnumerateRead(RegisteredPluginEnumerator, static_cast<void*>(&aVisibleList));
+#endif
 }
 
 #ifdef DEBUG

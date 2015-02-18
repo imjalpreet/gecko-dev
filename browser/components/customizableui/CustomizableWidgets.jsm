@@ -920,7 +920,7 @@ const CustomizableWidgets = [
     tooltiptext: "email-link-button.tooltiptext3",
     onCommand: function(aEvent) {
       let win = aEvent.view;
-      win.MailIntegration.sendLinkForWindow(win.content);
+      win.MailIntegration.sendLinkForBrowser(win.gBrowser.selectedBrowser)
     }
   }, {
     id: "loop-button",
@@ -944,7 +944,7 @@ const CustomizableWidgets = [
       node.setAttribute("tooltiptext", CustomizableUI.getLocalizedProperty(this, "tooltiptext"));
       node.setAttribute("removable", "true");
       node.addEventListener("command", function(event) {
-        aDocument.defaultView.LoopUI.openCallPanel(event);
+        aDocument.defaultView.LoopUI.togglePanel(event);
       });
 
       return node;

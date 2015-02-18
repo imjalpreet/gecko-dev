@@ -44,12 +44,12 @@ LIRGeneratorX86Shared::visitGuardShape(MGuardShape *ins)
 }
 
 void
-LIRGeneratorX86Shared::visitGuardObjectType(MGuardObjectType *ins)
+LIRGeneratorX86Shared::visitGuardObjectGroup(MGuardObjectGroup *ins)
 {
     MOZ_ASSERT(ins->obj()->type() == MIRType_Object);
 
-    LGuardObjectType *guard = new(alloc()) LGuardObjectType(useRegisterAtStart(ins->obj()));
-    assignSnapshot(guard, Bailout_ObjectIdentityOrTypeGuard);
+    LGuardObjectGroup *guard = new(alloc()) LGuardObjectGroup(useRegisterAtStart(ins->obj()));
+    assignSnapshot(guard, ins->bailoutKind());
     add(guard, ins);
     redefine(ins, ins->obj());
 }
@@ -155,9 +155,9 @@ LIRGeneratorX86Shared::lowerForBitAndAndBranch(LBitAndAndBranch *baab, MInstruct
 void
 LIRGeneratorX86Shared::lowerMulI(MMul *mul, MDefinition *lhs, MDefinition *rhs)
 {
-    // Note: lhs is used twice, so that we can restore the original value for the
-    // negative zero check.
-    LMulI *lir = new(alloc()) LMulI(useRegisterAtStart(lhs), useOrConstant(rhs), use(lhs));
+    // Note: If we need a negative zero check, lhs is used twice.
+    LAllocation lhsCopy = mul->canBeNegativeZero() ? use(lhs) : LAllocation();
+    LMulI *lir = new(alloc()) LMulI(useRegisterAtStart(lhs), useOrConstant(rhs), lhsCopy);
     if (mul->fallible())
         assignSnapshot(lir, Bailout_DoubleOutput);
     defineReuseInput(lir, mul, 0);
@@ -359,19 +359,6 @@ LIRGeneratorX86Shared::lowerTruncateFToInt32(MTruncateToInt32 *ins)
 }
 
 void
-LIRGeneratorX86Shared::visitForkJoinGetSlice(MForkJoinGetSlice *ins)
-{
-    // We fix eax and edx for cmpxchg and div.
-    LForkJoinGetSlice *lir = new(alloc())
-        LForkJoinGetSlice(useFixed(ins->forkJoinContext(), ForkJoinGetSliceReg_cx),
-                          tempFixed(eax),
-                          tempFixed(edx),
-                          tempFixed(ForkJoinGetSliceReg_temp0),
-                          tempFixed(ForkJoinGetSliceReg_temp1));
-    defineFixed(lir, ins, LAllocation(AnyRegister(ForkJoinGetSliceReg_output)));
-}
-
-void
 LIRGeneratorX86Shared::visitCompareExchangeTypedArrayElement(MCompareExchangeTypedArrayElement *ins)
 {
     MOZ_ASSERT(ins->arrayType() != Scalar::Float32);
@@ -523,7 +510,7 @@ LIRGeneratorX86Shared::visitAsmJSCompareExchangeHeap(MAsmJSCompareExchangeHeap *
     MOZ_ASSERT(ptr->type() == MIRType_Int32);
 
     bool byteArray = false;
-    switch (ins->viewType()) {
+    switch (ins->accessType()) {
       case Scalar::Int8:
       case Scalar::Uint8:
         byteArray = true;
@@ -568,7 +555,7 @@ LIRGeneratorX86Shared::visitAsmJSAtomicBinopHeap(MAsmJSAtomicBinopHeap *ins)
     MOZ_ASSERT(ptr->type() == MIRType_Int32);
 
     bool byteArray = false;
-    switch (ins->viewType()) {
+    switch (ins->accessType()) {
       case Scalar::Int8:
       case Scalar::Uint8:
         byteArray = true;
@@ -652,7 +639,7 @@ LIRGeneratorX86Shared::visitSimdBinaryArith(MSimdBinaryArith *ins)
 
     if (ins->type() == MIRType_Int32x4) {
         LSimdBinaryArithIx4 *lir = new(alloc()) LSimdBinaryArithIx4();
-        bool needsTemp = ins->operation() == MSimdBinaryArith::Mul && !MacroAssembler::HasSSE41();
+        bool needsTemp = ins->operation() == MSimdBinaryArith::Op_mul && !MacroAssembler::HasSSE41();
         lir->setTemp(0, needsTemp ? temp(LDefinition::INT32X4) : LDefinition::BogusTemp());
         lowerForFPU(lir, ins, lhs, rhs);
         return;
@@ -662,36 +649,32 @@ LIRGeneratorX86Shared::visitSimdBinaryArith(MSimdBinaryArith *ins)
 
     LSimdBinaryArithFx4 *lir = new(alloc()) LSimdBinaryArithFx4();
 
-    bool needsTemp = ins->operation() == MSimdBinaryArith::Max ||
-                     ins->operation() == MSimdBinaryArith::MinNum ||
-                     ins->operation() == MSimdBinaryArith::MaxNum;
+    bool needsTemp = ins->operation() == MSimdBinaryArith::Op_max ||
+                     ins->operation() == MSimdBinaryArith::Op_minNum ||
+                     ins->operation() == MSimdBinaryArith::Op_maxNum;
     lir->setTemp(0, needsTemp ? temp(LDefinition::FLOAT32X4) : LDefinition::BogusTemp());
 
     lowerForFPU(lir, ins, lhs, rhs);
 }
 
 void
-LIRGeneratorX86Shared::visitSimdTernaryBitwise(MSimdTernaryBitwise *ins)
+LIRGeneratorX86Shared::visitSimdSelect(MSimdSelect *ins)
 {
     MOZ_ASSERT(IsSimdType(ins->type()));
+    MOZ_ASSERT(ins->type() == MIRType_Int32x4 || ins->type() == MIRType_Float32x4,
+               "Unknown SIMD kind when doing bitwise operations");
 
-    if (ins->type() == MIRType_Int32x4 || ins->type() == MIRType_Float32x4) {
-        LSimdSelect *lins = new(alloc()) LSimdSelect;
+    LSimdSelect *lins = new(alloc()) LSimdSelect;
+    MDefinition *r0 = ins->getOperand(0);
+    MDefinition *r1 = ins->getOperand(1);
+    MDefinition *r2 = ins->getOperand(2);
 
-        // This must be useRegisterAtStart() because it is destroyed.
-        lins->setOperand(0, useRegisterAtStart(ins->getOperand(0)));
-        // This must be useRegisterAtStart() because it is destroyed.
-        lins->setOperand(1, useRegisterAtStart(ins->getOperand(1)));
-        // This could be useRegister(), but combining it with
-        // useRegisterAtStart() is broken see bug 772830.
-        lins->setOperand(2, useRegisterAtStart(ins->getOperand(2)));
-        // The output is constrained to be in the same register as the second
-        // argument to avoid redundantly copying the result into place. The
-        // register allocator will move the result if necessary.
-        defineReuseInput(lins, ins, 1);
-    } else {
-        MOZ_CRASH("Unknown SIMD kind when doing bitwise operations");
-    }
+    lins->setOperand(0, useRegister(r0));
+    lins->setOperand(1, useRegister(r1));
+    lins->setOperand(2, useRegister(r2));
+    lins->setTemp(0, temp(LDefinition::FLOAT32X4));
+
+    define(lins, ins);
 }
 
 void
@@ -705,7 +688,11 @@ LIRGeneratorX86Shared::visitSimdSplatX4(MSimdSplatX4 *ins)
         define(lir, ins);
         break;
       case MIRType_Float32x4:
-        defineReuseInput(lir, ins, 0);
+        // (Non-AVX) codegen actually wants the input and the output to be in
+        // the same register, but we can't currently use defineReuseInput
+        // because they have different types (scalar vs vector), so a spill slot
+        // for one may not be suitable for the other.
+        define(lir, ins);
         break;
       default:
         MOZ_CRASH("Unknown SIMD kind");
@@ -716,14 +703,15 @@ void
 LIRGeneratorX86Shared::visitSimdValueX4(MSimdValueX4 *ins)
 {
     if (ins->type() == MIRType_Float32x4) {
-        // As x is used at start and reused for the output, other inputs can't
-        // be used at start.
-        LAllocation x = useRegisterAtStart(ins->getOperand(0));
+        // Ideally, x would be used at start and reused for the output, however
+        // register allocation currently doesn't permit us to tie together two
+        // virtual registers with different types.
+        LAllocation x = useRegister(ins->getOperand(0));
         LAllocation y = useRegister(ins->getOperand(1));
         LAllocation z = useRegister(ins->getOperand(2));
         LAllocation w = useRegister(ins->getOperand(3));
-        LDefinition copyY = tempCopy(ins->getOperand(1), 1);
-        defineReuseInput(new (alloc()) LSimdValueFloat32x4(x, y, z, w, copyY), ins, 0);
+        LDefinition t = temp(LDefinition::FLOAT32X4);
+        define(new (alloc()) LSimdValueFloat32x4(x, y, z, w, t), ins);
     } else {
         MOZ_ASSERT(ins->type() == MIRType_Int32x4);
 

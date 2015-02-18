@@ -68,7 +68,7 @@ class RegExpObjectBuilder
     Rooted<RegExpObject*> reobj_;
 
     bool getOrCreate();
-    bool getOrCreateClone(HandleTypeObject type);
+    bool getOrCreateClone(HandleObjectGroup group);
 
   public:
     explicit RegExpObjectBuilder(ExclusiveContext *cx, RegExpObject *reobj = nullptr);
@@ -185,7 +185,7 @@ class RegExpShared
     /* Accessors */
 
     size_t getParenCount() const {
-        MOZ_ASSERT(isCompiled() || canStringMatch);
+        MOZ_ASSERT(isCompiled());
         return parenCount;
     }
 
@@ -242,8 +242,8 @@ class RegExpGuard : public JS::CustomAutoRooter
 {
     RegExpShared *re_;
 
-    RegExpGuard(const RegExpGuard &) MOZ_DELETE;
-    void operator=(const RegExpGuard &) MOZ_DELETE;
+    RegExpGuard(const RegExpGuard &) = delete;
+    void operator=(const RegExpGuard &) = delete;
 
   public:
     explicit RegExpGuard(ExclusiveContext *cx)
@@ -471,7 +471,7 @@ class RegExpObject : public NativeObject
     }
 
     /* Call setShared in preference to setPrivate. */
-    void setPrivate(void *priv) MOZ_DELETE;
+    void setPrivate(void *priv) = delete;
 };
 
 /*
@@ -489,6 +489,7 @@ RegExpToShared(JSContext *cx, HandleObject obj, RegExpGuard *g)
 {
     if (obj->is<RegExpObject>())
         return obj->as<RegExpObject>().getShared(cx, g);
+    MOZ_ASSERT(Proxy::objectClassIs(obj, ESClass_RegExp, cx));
     return Proxy::regexp_toShared(cx, obj, g);
 }
 
@@ -498,6 +499,9 @@ XDRScriptRegExpObject(XDRState<mode> *xdr, MutableHandle<RegExpObject*> objp);
 
 extern JSObject *
 CloneScriptRegExpObject(JSContext *cx, RegExpObject &re);
+
+JSAtom *
+EscapeRegExpPattern(JSContext *cx, HandleAtom src);
 
 } /* namespace js */
 

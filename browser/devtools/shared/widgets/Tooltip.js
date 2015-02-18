@@ -726,7 +726,7 @@ Tooltip.prototype = {
     this.content = vbox;
   },
 
-  _getImageDimensionLabel: (w, h) => w + " x " + h,
+  _getImageDimensionLabel: (w, h) => w + " \u00D7 " + h,
 
   /**
    * Fill the tooltip with a new instance of the spectrum color picker widget
@@ -1086,7 +1086,8 @@ SwatchColorPickerTooltip.prototype = Heritage.extend(SwatchBasedEditorTooltip.pr
       chromeWindow = Services.wm.getMostRecentWindow("navigator:browser");
       chromeWindow.focus();
     }
-    let dropper = new Eyedropper(chromeWindow, { copyOnSelect: false });
+    let dropper = new Eyedropper(chromeWindow, { copyOnSelect: false,
+                                                 context: "picker" });
 
     dropper.once("select", (event, color) => {
       if (toolboxWindow) {

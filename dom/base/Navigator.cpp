@@ -15,11 +15,12 @@
 #include "mozilla/dom/DesktopNotification.h"
 #include "mozilla/dom/File.h"
 #include "nsGeolocation.h"
+#include "nsIClassOfService.h"
 #include "nsIHttpProtocolHandler.h"
 #include "nsIContentPolicy.h"
 #include "nsIContentSecurityPolicy.h"
 #include "nsContentPolicyUtils.h"
-#include "nsCrossSiteListenerProxy.h"
+#include "nsCORSListenerProxy.h"
 #include "nsISupportsPriority.h"
 #include "nsICachingChannel.h"
 #include "nsIWebContentHandlerRegistrar.h"
@@ -1190,9 +1191,17 @@ Navigator::SendBeacon(const nsAString& aUrl,
     p->SetPriority(nsISupportsPriority::PRIORITY_LOWEST);
   }
 
+  nsCOMPtr<nsIClassOfService> cos(do_QueryInterface(channel));
+  if (cos) {
+    cos->AddClassFlags(nsIClassOfService::Background);
+  }
+
   nsRefPtr<nsCORSListenerProxy> cors = new nsCORSListenerProxy(new BeaconStreamListener(),
                                                                principal,
                                                                true);
+
+  rv = cors->Init(channel, true);
+  NS_ENSURE_SUCCESS(rv, false);
 
   // Start a preflight if cross-origin and content type is not whitelisted
   rv = secMan->CheckSameOriginURI(documentURI, uri, false);
@@ -1836,6 +1845,33 @@ Navigator::MozHasPendingMessage(const nsAString& aType, ErrorResult& aRv)
     return false;
   }
   return result;
+}
+
+void
+Navigator::MozSetMessageHandlerPromise(Promise& aPromise,
+                                       ErrorResult& aRv)
+{
+  // The WebIDL binding is responsible for the pref check here.
+  aRv = EnsureMessagesManager();
+  if (NS_WARN_IF(aRv.Failed())) {
+    return;
+  }
+
+  bool result = false;
+  aRv = mMessagesManager->MozIsHandlingMessage(&result);
+  if (NS_WARN_IF(aRv.Failed())) {
+    return;
+  }
+
+  if (!result) {
+    aRv.Throw(NS_ERROR_DOM_INVALID_ACCESS_ERR);
+    return;
+  }
+
+  aRv = mMessagesManager->MozSetMessageHandlerPromise(&aPromise);
+  if (NS_WARN_IF(aRv.Failed())) {
+    return;
+  }
 }
 
 void
@@ -2572,13 +2608,29 @@ Navigator::RequestMediaKeySystemAccess(const nsAString& aKeySystem,
     return nullptr;
   }
 
+  if (!Preferences::GetBool("media.eme.enabled", false)) {
+    // EME disabled by user, send notification to chrome so UI can
+    // inform user.
+    MediaKeySystemAccess::NotifyObservers(mWindow, aKeySystem,
+                                          MediaKeySystemStatus::Api_disabled);
+    p->MaybeReject(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
+    return p.forget();
+  }
+
   if (aKeySystem.IsEmpty() ||
       (aOptions.WasPassed() && aOptions.Value().IsEmpty())) {
     p->MaybeReject(NS_ERROR_DOM_INVALID_ACCESS_ERR);
     return p.forget();
   }
 
-  if (!MediaKeySystemAccess::IsKeySystemSupported(aKeySystem)) {
+  MediaKeySystemStatus status = MediaKeySystemAccess::GetKeySystemStatus(aKeySystem);
+  if (status != MediaKeySystemStatus::Available) {
+    if (status != MediaKeySystemStatus::Error) {
+      // Failed due to user disabling something, send a notification to
+      // chrome, so we can show some UI to explain how the user can rectify
+      // the situation.
+      MediaKeySystemAccess::NotifyObservers(mWindow, aKeySystem, status);
+    }
     p->MaybeReject(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
     return p.forget();
   }

@@ -86,6 +86,7 @@ namespace mozilla {
 class CSSStyleSheet;
 class ErrorResult;
 class EventStates;
+class PendingPlayerTracker;
 class SVGAttrAnimationRuleProcessor;
 
 namespace css {
@@ -145,9 +146,10 @@ struct FullScreenOptions {
 } // namespace dom
 } // namespace mozilla
 
+// 137c6144-513e-4edf-840e-5e3156638ed6
 #define NS_IDOCUMENT_IID \
-{ 0xf63d2f6e, 0xd1c1, 0x49b9, \
- { 0x88, 0x26, 0xd5, 0x9e, 0x5d, 0x72, 0x2a, 0x42 } }
+{ 0x137c6144, 0x513e, 0x4edf, \
+  { 0x84, 0x0e, 0x5e, 0x31, 0x56, 0x63, 0x8e, 0xd6 } }
 
 // Enum for requesting a particular type of document when creating a doc
 enum DocumentFlavor {
@@ -1822,6 +1824,17 @@ public:
   // mAnimationController isn't yet initialized.
   virtual nsSMILAnimationController* GetAnimationController() = 0;
 
+  // Gets the tracker for animation players that are waiting to start.
+  // Returns nullptr if there is no pending player tracker for this document
+  // which will be the case if there have never been any CSS animations or
+  // transitions on elements in the document.
+  virtual mozilla::PendingPlayerTracker* GetPendingPlayerTracker() = 0;
+
+  // Gets the tracker for animation players that are waiting to start and
+  // creates it if it doesn't already exist. As a result, the return value
+  // will never be nullptr.
+  virtual mozilla::PendingPlayerTracker* GetOrCreatePendingPlayerTracker() = 0;
+
   // Makes the images on this document capable of having their animation
   // active or suspended. An Image will animate as long as at least one of its
   // owning Documents needs it to animate; otherwise it can suspend.
@@ -1912,6 +1925,39 @@ public:
     return mOriginalDocument;
   }
 
+  /**
+   * These are called by the parser as it encounters <picture> tags, the end of
+   * said tags, and possible picture <source srcset> sources respectively. These
+   * are used to inform ResolvePreLoadImage() calls.  Unset attributes are
+   * expected to be marked void.
+   *
+   * NOTE that the parser does not attempt to track the current picture nesting
+   * level or whether the given <source> tag is within a picture -- it is only
+   * guaranteed to order these calls properly with respect to
+   * ResolvePreLoadImage.
+   */
+
+  virtual void PreloadPictureOpened() = 0;
+
+  virtual void PreloadPictureClosed() = 0;
+
+  virtual void PreloadPictureImageSource(const nsAString& aSrcsetAttr,
+                                         const nsAString& aSizesAttr,
+                                         const nsAString& aTypeAttr,
+                                         const nsAString& aMediaAttr) = 0;
+
+  /**
+   * Called by the parser to resolve an image for preloading. The parser will
+   * call the PreloadPicture* functions to inform us of possible <picture>
+   * nesting and possible sources, which are used to inform URL selection
+   * responsive <picture> or <img srcset> images.  Unset attributes are expected
+   * to be marked void.
+   */
+  virtual already_AddRefed<nsIURI>
+    ResolvePreloadImage(nsIURI *aBaseURI,
+                        const nsAString& aSrcAttr,
+                        const nsAString& aSrcsetAttr,
+                        const nsAString& aSizesAttr) = 0;
   /**
    * Called by nsParser to preload images. Can be removed and code moved
    * to nsPreloadURIs::PreloadURIs() in file nsParser.cpp whenever the
@@ -2225,10 +2271,9 @@ public:
                                         Element* aCustomElement,
                                         mozilla::dom::LifecycleCallbackArgs* aArgs = nullptr,
                                         mozilla::dom::CustomElementDefinition* aDefinition = nullptr) = 0;
-  virtual void SwizzleCustomElement(Element* aElement,
-                                    const nsAString& aTypeExtension,
-                                    uint32_t aNamespaceID,
-                                    mozilla::ErrorResult& rv) = 0;
+  virtual void SetupCustomElement(Element* aElement,
+                                  uint32_t aNamespaceID,
+                                  const nsAString* aTypeExtension = nullptr) = 0;
   virtual void
     RegisterElement(JSContext* aCx, const nsAString& aName,
                     const mozilla::dom::ElementRegistrationOptions& aOptions,
@@ -2497,7 +2542,7 @@ protected:
   virtual void MutationEventDispatched(nsINode* aTarget) = 0;
   friend class mozAutoSubtreeModified;
 
-  virtual Element* GetNameSpaceElement()
+  virtual Element* GetNameSpaceElement() MOZ_OVERRIDE
   {
     return GetRootElement();
   }

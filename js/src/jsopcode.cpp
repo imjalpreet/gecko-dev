@@ -39,7 +39,6 @@
 
 #include "jscntxtinlines.h"
 #include "jscompartmentinlines.h"
-#include "jsinferinlines.h"
 #include "jsobjinlines.h"
 #include "jsscriptinlines.h"
 
@@ -1692,7 +1691,7 @@ ExpressionDecompiler::getLocal(uint32_t local, jsbytecode *pc)
 
         MOZ_CRASH("No binding");
     }
-    for (NestedScopeObject *chain = script->getStaticScope(pc);
+    for (NestedScopeObject *chain = script->getStaticBlockScope(pc);
          chain;
          chain = chain->enclosingNestedScope())
     {
@@ -1809,7 +1808,7 @@ DecompileExpressionFromStack(JSContext *cx, int spindex, int skipStackHits, Hand
     AutoCompartment ac(cx, &script->global());
     jsbytecode *valuepc = frameIter.pc();
     RootedFunction fun(cx, frameIter.isFunctionFrame()
-                           ? frameIter.callee()
+                           ? frameIter.calleeTemplate()
                            : nullptr);
 
     MOZ_ASSERT(script->containsPC(valuepc));
@@ -1889,8 +1888,8 @@ DecompileArgumentFromStack(JSContext *cx, int formalIndex, char **res)
     AutoCompartment ac(cx, &script->global());
     jsbytecode *current = frameIter.pc();
     RootedFunction fun(cx, frameIter.isFunctionFrame()
-                       ? frameIter.callee()
-                       : nullptr);
+                           ? frameIter.calleeTemplate()
+                           : nullptr);
 
     MOZ_ASSERT(script->containsPC(current));
 

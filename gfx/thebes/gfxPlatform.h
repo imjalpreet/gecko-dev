@@ -37,6 +37,7 @@ class gfxTextRun;
 class nsIURI;
 class nsIAtom;
 class nsIObserver;
+class SRGBOverrideObserver;
 struct gfxRGBA;
 
 namespace mozilla {
@@ -50,6 +51,7 @@ class SourceSurface;
 class DataSourceSurface;
 class ScaledFont;
 class DrawEventRecorder;
+class VsyncSource;
 
 inline uint32_t
 BackendTypeBit(BackendType b)
@@ -158,6 +160,8 @@ GetBackendName(mozilla::gfx::BackendType aBackend)
 }
 
 class gfxPlatform {
+    friend class SRGBOverrideObserver;
+
 public:
     typedef mozilla::gfx::Color Color;
     typedef mozilla::gfx::DataSourceSurface DataSourceSurface;
@@ -273,7 +277,6 @@ public:
 
     /// These should be used instead of directly accessing the preference,
     /// as different platforms may override the behaviour.
-    virtual bool UseTiling() { return gfxPrefs::LayersTilesEnabledDoNotUseDirectly(); }
     virtual bool UseProgressivePaint() { return gfxPrefs::ProgressivePaintDoNotUseDirectly(); }
 
     void GetAzureBackendInfo(mozilla::widget::InfoObject &aObj) {
@@ -481,6 +484,7 @@ public:
 
     static bool CanUseDirect3D9();
     static bool CanUseDirect3D11();
+    static bool CanUseDXVA();
 
     /**
      * Is it possible to use buffer rotation.  Note that these
@@ -583,6 +587,17 @@ public:
     static bool UsesOffMainThreadCompositing();
 
     bool HasEnoughTotalSystemMemoryForSkiaGL();
+
+    /**
+     * Get the hardware vsync source for each platform.
+     * Should only exist and be valid on the parent process
+     */
+    virtual mozilla::gfx::VsyncSource* GetHardwareVsync() {
+      MOZ_ASSERT(mVsyncSource != nullptr);
+      MOZ_ASSERT(XRE_IsParentProcess());
+      return mVsyncSource;
+    }
+
 protected:
     gfxPlatform();
     virtual ~gfxPlatform();
@@ -593,7 +608,7 @@ protected:
     /**
      * Initialized hardware vsync based on each platform.
      */
-    virtual void InitHardwareVsync() {}
+    virtual already_AddRefed<mozilla::gfx::VsyncSource> CreateHardwareVsyncSource();
 
     /**
      * Helper method, creates a draw target for a specific Azure backend.
@@ -659,6 +674,11 @@ protected:
 
     uint32_t mTotalSystemMemory;
 
+    // Hardware vsync source. Only valid on parent process
+    nsRefPtr<mozilla::gfx::VsyncSource> mVsyncSource;
+
+    mozilla::RefPtr<mozilla::gfx::DrawTarget> mScreenReferenceDrawTarget;
+
 private:
     /**
      * Start up Thebes.
@@ -674,7 +694,6 @@ private:
     virtual void GetPlatformCMSOutputProfile(void *&mem, size_t &size);
 
     nsRefPtr<gfxASurface> mScreenReferenceSurface;
-    mozilla::RefPtr<mozilla::gfx::DrawTarget> mScreenReferenceDrawTarget;
     nsTArray<uint32_t> mCJKPrefLangs;
     nsCOMPtr<nsIObserver> mSRGBOverrideObserver;
     nsCOMPtr<nsIObserver> mFontPrefsObserver;

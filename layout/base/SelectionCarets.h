@@ -77,7 +77,7 @@ public:
   NS_DECL_NSISELECTIONLISTENER
 
   // Notify selection carets about the blur event to hidden itself
-  void NotifyBlur();
+  void NotifyBlur(bool aIsLeavingDocument);
 
   // nsIScrollObserver
   virtual void ScrollPositionChanged() MOZ_OVERRIDE;
@@ -108,7 +108,7 @@ public:
 private:
   virtual ~SelectionCarets();
 
-  SelectionCarets() MOZ_DELETE;
+  SelectionCarets() = delete;
 
   /**
    * Set visibility for selection caret.
@@ -121,8 +121,8 @@ private:
   void UpdateSelectionCarets();
 
   /**
-   * Select word base on current position, only active when element
-   * is focused. Triggered by long tap event.
+   * Select a word base on current position, which activates only if element is
+   * selectable. Triggered by long tap event.
    */
   nsresult SelectWord();
 
@@ -207,7 +207,7 @@ private:
                                           dom::SelectionState aState);
   void DispatchSelectionStateChangedEvent(dom::Selection* aSelection,
                                           const dom::Sequence<dom::SelectionState>& aStates);
-  nsRect GetSelectionBoundingRect(dom::Selection* aSel);
+  void DispatchCustomEvent(const nsAString& aEvent);
 
   /**
    * Detecting long tap using timer
@@ -217,6 +217,7 @@ private:
   static void FireLongTap(nsITimer* aTimer, void* aSelectionCarets);
 
   void LaunchScrollEndDetector();
+  void CancelScrollEndDetector();
   static void FireScrollEnd(nsITimer* aTimer, void* aSelectionCarets);
 
   nsIPresShell* mPresShell;
@@ -241,10 +242,26 @@ private:
   int32_t mActiveTouchId;
 
   nscoord mCaretCenterToDownPointOffsetY;
+
+  // The horizontal boundary is defined by the first selected frame which
+  // determines the start-caret position. When users drag the end-caret up,
+  // the touch input(pos.y) will be changed to not cross this boundary.
+  // Otherwise, the selection range changes to one character only
+  // which causes the bad user experience.
+  nscoord mDragUpYBoundary;
+  // The horizontal boundary is defined by the last selected frame which
+  // determines the end-caret position. When users drag the start-caret down,
+  // the touch input(pos.y) will be changed to not cross this boundary.
+  // Otherwise, the selection range changes to one character only
+  // which causes the bad user experience.
+  nscoord mDragDownYBoundary;
+
   DragMode mDragMode;
 
   // True if AsyncPanZoom is enabled
   bool mAsyncPanZoomEnabled;
+  // True if AsyncPanZoom is started
+  bool mInAsyncPanZoomGesture;
 
   bool mEndCaretVisible;
   bool mStartCaretVisible;

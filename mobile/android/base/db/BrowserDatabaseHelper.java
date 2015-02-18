@@ -24,6 +24,7 @@ import android.database.Cursor;
 import android.database.DatabaseUtils;
 import android.database.SQLException;
 import android.database.sqlite.SQLiteDatabase;
+import android.database.sqlite.SQLiteException;
 import android.database.sqlite.SQLiteOpenHelper;
 import android.net.Uri;
 import android.os.Build;
@@ -33,7 +34,7 @@ import android.util.Log;
 final class BrowserDatabaseHelper extends SQLiteOpenHelper {
 
     private static final String LOGTAG = "GeckoBrowserDBHelper";
-    public static final int DATABASE_VERSION = 21;
+    public static final int DATABASE_VERSION = 22;
     public static final String DATABASE_NAME = "browser.db";
 
     final protected Context mContext;
@@ -324,12 +325,15 @@ final class BrowserDatabaseHelper extends SQLiteOpenHelper {
                     ReadingListItems.GUID + " TEXT UNIQUE NOT NULL, " +
                     ReadingListItems.DATE_MODIFIED + " INTEGER NOT NULL, " +
                     ReadingListItems.DATE_CREATED + " INTEGER NOT NULL, " +
-                    ReadingListItems.LENGTH + " INTEGER DEFAULT 0 ); ");
+                    ReadingListItems.LENGTH + " INTEGER DEFAULT 0, " +
+                    ReadingListItems.CONTENT_STATUS + " TINYINT DEFAULT " + ReadingListItems.STATUS_UNFETCHED + "); ");
 
         db.execSQL("CREATE INDEX reading_list_url ON " + TABLE_READING_LIST + "("
                 + ReadingListItems.URL + ")");
         db.execSQL("CREATE UNIQUE INDEX reading_list_guid ON " + TABLE_READING_LIST + "("
                 + ReadingListItems.GUID + ")");
+        db.execSQL("CREATE INDEX reading_list_content_status ON " + TABLE_READING_LIST + "("
+                + ReadingListItems.CONTENT_STATUS + ")");
     }
 
     private void createOrUpdateAllSpecialFolders(SQLiteDatabase db) {
@@ -761,6 +765,23 @@ final class BrowserDatabaseHelper extends SQLiteOpenHelper {
         createSearchHistoryTable(db);
     }
 
+    private void upgradeDatabaseFrom21to22(SQLiteDatabase db) {
+        debug("Adding CONTENT_STATUS column to reading list table.");
+
+        try {
+            db.execSQL("ALTER TABLE " + TABLE_READING_LIST +
+                       " ADD COLUMN " + ReadingListItems.CONTENT_STATUS +
+                       " TINYINT DEFAULT " + ReadingListItems.STATUS_UNFETCHED);
+
+            db.execSQL("CREATE INDEX reading_list_content_status ON " + TABLE_READING_LIST + "("
+                    + ReadingListItems.CONTENT_STATUS + ")");
+        } catch (SQLiteException e) {
+            // We're betting that an error here means that the table already has the column,
+            // so we're failing due to the duplicate column name.
+            Log.e(LOGTAG, "Error upgrading database from 21 to 22", e);
+        }
+    }
+
     private void createV19CombinedView(SQLiteDatabase db) {
         db.execSQL("DROP VIEW IF EXISTS " + VIEW_COMBINED);
         db.execSQL("DROP VIEW IF EXISTS " + VIEW_COMBINED_WITH_FAVICONS);
@@ -823,6 +844,14 @@ final class BrowserDatabaseHelper extends SQLiteOpenHelper {
 
                 case 20:
                     upgradeDatabaseFrom19to20(db);
+                    break;
+
+                case 22:
+                    if (oldVersion <= 17) {
+                         // We just created the right table in 17to18. Do nothing here.
+                    } else {
+                         upgradeDatabaseFrom21to22(db);
+                    }
                     break;
             }
         }

@@ -11,6 +11,7 @@ DIRS += [
     'downloads',
     'feeds',
     'loop',
+    'migration',
     'places',
     'preferences',
     'privatebrowsing',
@@ -18,10 +19,9 @@ DIRS += [
     'sessionstore',
     'shell',
     'selfsupport',
-    'sidebar',
     'tabview',
+    'uitour',
     'translation',
-    'migration',
 ]
 
 DIRS += ['build']

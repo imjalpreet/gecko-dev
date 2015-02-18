@@ -161,6 +161,10 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
     /////////////////////////////////////////////////////////////////
     // X86/X64-common interface.
     /////////////////////////////////////////////////////////////////
+    Address ToPayload(Address value) {
+        return value;
+    }
+
     void storeValue(ValueOperand val, Operand dest) {
         movq(val.valueReg(), dest);
     }
@@ -631,7 +635,7 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
     }
 
     void branch32(Condition cond, AbsoluteAddress lhs, Imm32 rhs, Label *label) {
-        if (X86Assembler::isAddressImmediate(lhs.addr)) {
+        if (X86Encoding::IsAddressImmediate(lhs.addr)) {
             branch32(cond, Operand(lhs), rhs, label);
         } else {
             mov(ImmPtr(lhs.addr), ScratchReg);
@@ -643,7 +647,7 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
         branch32(cond, Address(ScratchReg, 0), rhs, label);
     }
     void branch32(Condition cond, AbsoluteAddress lhs, Register rhs, Label *label) {
-        if (X86Assembler::isAddressImmediate(lhs.addr)) {
+        if (X86Encoding::IsAddressImmediate(lhs.addr)) {
             branch32(cond, Operand(lhs), rhs, label);
         } else {
             mov(ImmPtr(lhs.addr), ScratchReg);
@@ -651,7 +655,7 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
         }
     }
     void branchTest32(Condition cond, AbsoluteAddress address, Imm32 imm, Label *label) {
-        if (X86Assembler::isAddressImmediate(address.addr)) {
+        if (X86Encoding::IsAddressImmediate(address.addr)) {
             test32(Operand(address), imm);
         } else {
             mov(ImmPtr(address.addr), ScratchReg);
@@ -663,7 +667,7 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
     // Specialization for AbsoluteAddress.
     void branchPtr(Condition cond, AbsoluteAddress addr, Register ptr, Label *label) {
         MOZ_ASSERT(ptr != ScratchReg);
-        if (X86Assembler::isAddressImmediate(addr.addr)) {
+        if (X86Encoding::IsAddressImmediate(addr.addr)) {
             branchPtr(cond, Operand(addr), ptr, label);
         } else {
             mov(ImmPtr(addr.addr), ScratchReg);
@@ -671,7 +675,7 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
         }
     }
     void branchPtr(Condition cond, AbsoluteAddress addr, ImmWord ptr, Label *label) {
-        if (X86Assembler::isAddressImmediate(addr.addr)) {
+        if (X86Encoding::IsAddressImmediate(addr.addr)) {
             branchPtr(cond, Operand(addr), ptr, label);
         } else {
             mov(ImmPtr(addr.addr), ScratchReg);
@@ -763,7 +767,7 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
         movePtr(noteMaybeNurseryPtr(imm), dest);
     }
     void loadPtr(AbsoluteAddress address, Register dest) {
-        if (X86Assembler::isAddressImmediate(address.addr)) {
+        if (X86Encoding::IsAddressImmediate(address.addr)) {
             movq(Operand(address), dest);
         } else {
             mov(ImmPtr(address.addr), ScratchReg);
@@ -784,7 +788,7 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
         shlq(Imm32(1), dest);
     }
     void load32(AbsoluteAddress address, Register dest) {
-        if (X86Assembler::isAddressImmediate(address.addr)) {
+        if (X86Encoding::IsAddressImmediate(address.addr)) {
             movl(Operand(address), dest);
         } else {
             mov(ImmPtr(address.addr), ScratchReg);
@@ -819,7 +823,7 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
         movq(src, dest);
     }
     void storePtr(Register src, AbsoluteAddress address) {
-        if (X86Assembler::isAddressImmediate(address.addr)) {
+        if (X86Encoding::IsAddressImmediate(address.addr)) {
             movq(src, Operand(address));
         } else {
             mov(ImmPtr(address.addr), ScratchReg);
@@ -827,7 +831,7 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
         }
     }
     void store32(Register src, AbsoluteAddress address) {
-        if (X86Assembler::isAddressImmediate(address.addr)) {
+        if (X86Encoding::IsAddressImmediate(address.addr)) {
             movl(src, Operand(address));
         } else {
             mov(ImmPtr(address.addr), ScratchReg);
@@ -1104,7 +1108,7 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
     }
 
     void boxDouble(FloatRegister src, const ValueOperand &dest) {
-        movq(src, dest.valueReg());
+        vmovq(src, dest.valueReg());
     }
     void boxNonDouble(JSValueType type, Register src, const ValueOperand &dest) {
         MOZ_ASSERT(src != dest.valueReg());
@@ -1151,7 +1155,7 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
     }
 
     void unboxDouble(const ValueOperand &src, FloatRegister dest) {
-        movq(src.valueReg(), dest);
+        vmovq(src.valueReg(), dest);
     }
     void unboxPrivate(const ValueOperand &src, const Register dest) {
         movq(src.valueReg(), dest);
@@ -1165,9 +1169,6 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
     // Unbox any non-double value into dest. Prefer unboxInt32 or unboxBoolean
     // instead if the source type is known.
     void unboxNonDouble(const ValueOperand &src, Register dest) {
-        // In a non-trivial coupling, we're not permitted to use ScratchReg when
-        // src and dest are different registers, because of how extractObject is
-        // implemented.
         if (src.valueReg() == dest) {
             mov(ImmWord(JSVAL_PAYLOAD_MASK), ScratchReg);
             andq(ScratchReg, dest);
@@ -1201,16 +1202,14 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
     void unboxObject(const ValueOperand &src, Register dest) { unboxNonDouble(src, dest); }
     void unboxObject(const Operand &src, Register dest) { unboxNonDouble(src, dest); }
     void unboxObject(const Address &src, Register dest) { unboxNonDouble(Operand(src), dest); }
+    void unboxObject(const BaseIndex &src, Register dest) { unboxNonDouble(Operand(src), dest); }
 
     // Extended unboxing API. If the payload is already in a register, returns
     // that register. Otherwise, provides a move to the given scratch register,
     // and returns that.
     Register extractObject(const Address &address, Register scratch) {
         MOZ_ASSERT(scratch != ScratchReg);
-        loadPtr(address, ScratchReg);
-        // We have a special coupling with unboxObject. As long as the registers
-        // aren't equal, it doesn't use ScratchReg.
-        unboxObject(ValueOperand(ScratchReg), scratch);
+        unboxObject(address, scratch);
         return scratch;
     }
     Register extractObject(const ValueOperand &value, Register scratch) {
@@ -1343,6 +1342,23 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
     template <typename T>
     void storeUnboxedValue(ConstantOrRegister value, MIRType valueType, const T &dest, MIRType slotType);
 
+    template <typename T>
+    void storeUnboxedPayload(ValueOperand value, T address, size_t nbytes) {
+        switch (nbytes) {
+          case 8:
+            unboxNonDouble(value, ScratchReg);
+            storePtr(ScratchReg, address);
+            return;
+          case 4:
+            store32(value.valueReg(), address);
+            return;
+          case 1:
+            store8(value.valueReg(), address);
+            return;
+          default: MOZ_CRASH("Bad payload width");
+        }
+    }
+
     void loadInstructionPointerAfterCall(Register dest) {
         loadPtr(Address(StackPointer, 0x0), dest);
     }
@@ -1356,7 +1372,7 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
     }
 
     void inc64(AbsoluteAddress dest) {
-        if (X86Assembler::isAddressImmediate(dest.addr)) {
+        if (X86Encoding::IsAddressImmediate(dest.addr)) {
             addPtr(Imm32(1), Operand(dest));
         } else {
             mov(ImmPtr(dest.addr), ScratchReg);
@@ -1450,6 +1466,10 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
 
     void branchPtrInNurseryRange(Condition cond, Register ptr, Register temp, Label *label);
     void branchValueIsNurseryObject(Condition cond, ValueOperand value, Register temp, Label *label);
+
+    // Instrumentation for entering and leaving the profiler.
+    void profilerEnterFrame(Register framePtr, Register scratch);
+    void profilerExitFrame();
 };
 
 typedef MacroAssemblerX64 MacroAssemblerSpecific;

@@ -99,18 +99,8 @@ class HTMLElement(object):
         '''
         Sends the string via synthesized keypresses to the element.
         '''
-        typing = []
-        for val in string:
-            if isinstance(val, Keys):
-                typing.append(val)
-            elif isinstance(val, int):
-                val = str(val)
-                for i in range(len(val)):
-                    typing.append(val[i])
-            else:
-                for i in range(len(val)):
-                    typing.append(val[i])
-        return self.marionette._send_message('sendKeysToElement', 'ok', id=self.id, value=typing)
+        keys = Marionette.convert_keys(*string)
+        return self.marionette._send_message('sendKeysToElement', 'ok', id=self.id, value=keys)
 
     def clear(self):
         '''
@@ -403,6 +393,25 @@ class Actions(object):
         self.action_chain.append(['release'])
         return self
 
+    def key_down(self, key_code):
+        """
+        Perform a "keyDown" action for the given key code. Modifier keys are
+        respected by the server for the course of an action chain.
+
+        :param key_code: The key to press as a result of this action.
+        """
+        self.action_chain.append(['keyDown', key_code])
+        return self
+
+    def key_up(self, key_code):
+        """
+        Perform a "keyUp" action for the given key code. Modifier keys are
+        respected by the server for the course of an action chain.
+        :param key_up: The key to release as a result of this action.
+        """
+        self.action_chain.append(['keyUp', key_code])
+        return self
+
     def perform(self):
         '''
         Sends the action chain built so far to the server side for execution and clears the current chain of actions.
@@ -454,6 +463,42 @@ class MultiActions(object):
         '''
         return self.marionette._send_message('multiAction', 'ok', value=self.multi_actions, max_length=self.max_length)
 
+class Alert(object):
+    '''
+    A class for interacting with alerts.
+
+    ::
+
+      Alert(marionette).accept()
+      Alert(merionette).dismiss()
+    '''
+
+    def __init__(self, marionette):
+        self.marionette = marionette
+
+    def accept(self):
+        """Accept a currently displayed modal dialog.
+        """
+        self.marionette._send_message('acceptDialog', 'ok')
+
+    def dismiss(self):
+        """Dismiss a currently displayed modal dialog.
+        """
+        self.marionette._send_message('dismissDialog', 'ok')
+
+    @property
+    def text(self):
+        """Return the currently displayed text in a tab modal.
+        """
+        return self.marionette._send_message('getTextFromDialog', 'value')
+
+    def send_keys(self, *string):
+        """Send keys to the currently displayed text input area in an open
+        tab modal dialog.
+        """
+        keys = Marionette.convert_keys(*string)
+        self.marionette._send_message('sendKeysToDialog', 'ok', value=keys)
+
 
 class Marionette(object):
     """
@@ -472,7 +517,7 @@ class Marionette(object):
                  gecko_log=None, homedir=None, baseurl=None, no_window=False, logdir=None,
                  busybox=None, symbols_path=None, timeout=None, socket_timeout=360,
                  device_serial=None, adb_path=None, process_args=None,
-                 adb_host=None, adb_port=None):
+                 adb_host=None, adb_port=None, prefs=None):
         self.host = host
         self.port = self.local_port = port
         self.bin = bin
@@ -519,7 +564,7 @@ class Marionette(object):
             self.instance = instance_class(host=self.host, port=self.port,
                                            bin=self.bin, profile=self.profile,
                                            app_args=app_args, symbols_path=symbols_path,
-                                           gecko_log=gecko_log)
+                                           gecko_log=gecko_log, prefs=prefs)
             self.instance.start()
             assert(self.wait_for_port()), "Timed out waiting for port!"
 
@@ -658,57 +703,65 @@ class Marionette(object):
                                  "result": result})
 
     def _handle_error(self, response):
-        if 'error' in response and isinstance(response['error'], dict):
-            status = response['error'].get('status', 500)
-            message = response['error'].get('message')
-            stacktrace = response['error'].get('stacktrace')
-            # status numbers come from
-            # http://code.google.com/p/selenium/wiki/JsonWireProtocol#Response_Status_Codes
-            if status == errors.ErrorCodes.NO_SUCH_ELEMENT:
-                raise errors.NoSuchElementException(message=message, status=status, stacktrace=stacktrace)
-            elif status == errors.ErrorCodes.NO_SUCH_FRAME:
-                raise errors.NoSuchFrameException(message=message, status=status, stacktrace=stacktrace)
-            elif status == errors.ErrorCodes.STALE_ELEMENT_REFERENCE:
-                raise errors.StaleElementException(message=message, status=status, stacktrace=stacktrace)
-            elif status == errors.ErrorCodes.ELEMENT_NOT_VISIBLE:
-                raise errors.ElementNotVisibleException(message=message, status=status, stacktrace=stacktrace)
-            elif status == errors.ErrorCodes.INVALID_ELEMENT_STATE:
-                raise errors.InvalidElementStateException(message=message, status=status, stacktrace=stacktrace)
-            elif status == errors.ErrorCodes.UNKNOWN_ERROR:
-                raise errors.MarionetteException(message=message, status=status, stacktrace=stacktrace)
-            elif status == errors.ErrorCodes.ELEMENT_IS_NOT_SELECTABLE:
-                raise errors.ElementNotSelectableException(message=message, status=status, stacktrace=stacktrace)
-            elif status == errors.ErrorCodes.JAVASCRIPT_ERROR:
-                raise errors.JavascriptException(message=message, status=status, stacktrace=stacktrace)
-            elif status == errors.ErrorCodes.XPATH_LOOKUP_ERROR:
-                raise errors.XPathLookupException(message=message, status=status, stacktrace=stacktrace)
-            elif status == errors.ErrorCodes.TIMEOUT:
-                raise errors.TimeoutException(message=message, status=status, stacktrace=stacktrace)
-            elif status == errors.ErrorCodes.NO_SUCH_WINDOW:
-                raise errors.NoSuchWindowException(message=message, status=status, stacktrace=stacktrace)
-            elif status == errors.ErrorCodes.INVALID_COOKIE_DOMAIN:
-                raise errors.InvalidCookieDomainException(message=message, status=status, stacktrace=stacktrace)
-            elif status == errors.ErrorCodes.UNABLE_TO_SET_COOKIE:
-                raise errors.UnableToSetCookieException(message=message, status=status, stacktrace=stacktrace)
-            elif status == errors.ErrorCodes.NO_ALERT_OPEN:
-                raise errors.NoAlertPresentException(message=message, status=status, stacktrace=stacktrace)
-            elif status == errors.ErrorCodes.SCRIPT_TIMEOUT:
-                raise errors.ScriptTimeoutException(message=message, status=status, stacktrace=stacktrace)
-            elif status == errors.ErrorCodes.INVALID_SELECTOR \
-                 or status == errors.ErrorCodes.INVALID_XPATH_SELECTOR \
-                 or status == errors.ErrorCodes.INVALID_XPATH_SELECTOR_RETURN_TYPER:
-                raise errors.InvalidSelectorException(message=message, status=status, stacktrace=stacktrace)
-            elif status == errors.ErrorCodes.MOVE_TARGET_OUT_OF_BOUNDS:
-                raise errors.MoveTargetOutOfBoundsException(message=message, status=status, stacktrace=stacktrace)
-            elif status == errors.ErrorCodes.FRAME_SEND_NOT_INITIALIZED_ERROR:
-                raise errors.FrameSendNotInitializedError(message=message, status=status, stacktrace=stacktrace)
-            elif status == errors.ErrorCodes.FRAME_SEND_FAILURE_ERROR:
-                raise errors.FrameSendFailureError(message=message, status=status, stacktrace=stacktrace)
-            elif status == errors.ErrorCodes.UNSUPPORTED_OPERATION:
-                raise errors.UnsupportedOperationException(message=message, status=status, stacktrace=stacktrace)
-            else:
-                raise errors.MarionetteException(message=message, status=status, stacktrace=stacktrace)
-        raise errors.MarionetteException(message=response, status=500)
+        if "error" not in response or not isinstance(response["error"], dict):
+            raise errors.MarionetteException(
+                "Malformed packet, expected key 'error' to be a dict: %s" % response)
+
+        error = response["error"]
+        status = error.get("status", 500)
+        message = error.get("message")
+        stacktrace = error.get("stacktrace")
+
+        # status numbers come from
+        # http://code.google.com/p/selenium/wiki/JsonWireProtocol#Response_Status_Codes
+        if status == errors.ErrorCodes.NO_SUCH_ELEMENT:
+            raise errors.NoSuchElementException(message=message, status=status, stacktrace=stacktrace)
+        elif status == errors.ErrorCodes.NO_SUCH_FRAME:
+            raise errors.NoSuchFrameException(message=message, status=status, stacktrace=stacktrace)
+        elif status == errors.ErrorCodes.STALE_ELEMENT_REFERENCE:
+            raise errors.StaleElementException(message=message, status=status, stacktrace=stacktrace)
+        elif status == errors.ErrorCodes.ELEMENT_NOT_VISIBLE:
+            raise errors.ElementNotVisibleException(message=message, status=status, stacktrace=stacktrace)
+        elif status == errors.ErrorCodes.ELEMENT_NOT_ACCESSIBLE:
+            raise errors.ElementNotAccessibleException(message=message, status=status, stacktrace=stacktrace)
+        elif status == errors.ErrorCodes.INVALID_ELEMENT_STATE:
+            raise errors.InvalidElementStateException(message=message, status=status, stacktrace=stacktrace)
+        elif status == errors.ErrorCodes.UNKNOWN_ERROR:
+            raise errors.MarionetteException(message=message, status=status, stacktrace=stacktrace)
+        elif status == errors.ErrorCodes.ELEMENT_IS_NOT_SELECTABLE:
+            raise errors.ElementNotSelectableException(message=message, status=status, stacktrace=stacktrace)
+        elif status == errors.ErrorCodes.JAVASCRIPT_ERROR:
+            raise errors.JavascriptException(message=message, status=status, stacktrace=stacktrace)
+        elif status == errors.ErrorCodes.XPATH_LOOKUP_ERROR:
+            raise errors.XPathLookupException(message=message, status=status, stacktrace=stacktrace)
+        elif status == errors.ErrorCodes.TIMEOUT:
+            raise errors.TimeoutException(message=message, status=status, stacktrace=stacktrace)
+        elif status == errors.ErrorCodes.NO_SUCH_WINDOW:
+            raise errors.NoSuchWindowException(message=message, status=status, stacktrace=stacktrace)
+        elif status == errors.ErrorCodes.INVALID_COOKIE_DOMAIN:
+            raise errors.InvalidCookieDomainException(message=message, status=status, stacktrace=stacktrace)
+        elif status == errors.ErrorCodes.UNABLE_TO_SET_COOKIE:
+            raise errors.UnableToSetCookieException(message=message, status=status, stacktrace=stacktrace)
+        elif status == errors.ErrorCodes.NO_ALERT_OPEN:
+            raise errors.NoAlertPresentException(message=message, status=status, stacktrace=stacktrace)
+        elif status == errors.ErrorCodes.SCRIPT_TIMEOUT:
+            raise errors.ScriptTimeoutException(message=message, status=status, stacktrace=stacktrace)
+        elif status == errors.ErrorCodes.INVALID_SELECTOR \
+             or status == errors.ErrorCodes.INVALID_XPATH_SELECTOR \
+             or status == errors.ErrorCodes.INVALID_XPATH_SELECTOR_RETURN_TYPER:
+            raise errors.InvalidSelectorException(message=message, status=status, stacktrace=stacktrace)
+        elif status == errors.ErrorCodes.MOVE_TARGET_OUT_OF_BOUNDS:
+            raise errors.MoveTargetOutOfBoundsException(message=message, status=status, stacktrace=stacktrace)
+        elif status == errors.ErrorCodes.FRAME_SEND_NOT_INITIALIZED_ERROR:
+            raise errors.FrameSendNotInitializedError(message=message, status=status, stacktrace=stacktrace)
+        elif status == errors.ErrorCodes.FRAME_SEND_FAILURE_ERROR:
+            raise errors.FrameSendFailureError(message=message, status=status, stacktrace=stacktrace)
+        elif status == errors.ErrorCodes.UNSUPPORTED_OPERATION:
+            raise errors.UnsupportedOperationException(message=message, status=status, stacktrace=stacktrace)
+        elif status == errors.ErrorCodes.SESSION_NOT_CREATED:
+            raise errors.SessionNotCreatedException(message=message, status=status, stacktrace=stacktrace)
+        else:
+            raise errors.MarionetteException(message=message, status=status, stacktrace=stacktrace)
 
     def _reset_timeouts(self):
         if self.timeout is not None:
@@ -735,6 +788,21 @@ class Marionette(object):
             print ('PROCESS-CRASH | %s | abnormal termination with exit code %d' %
                 (name, returncode))
         return crashed
+
+    @staticmethod
+    def convert_keys(*string):
+        typing = []
+        for val in string:
+            if isinstance(val, Keys):
+                typing.append(val)
+            elif isinstance(val, int):
+                val = str(val)
+                for i in range(len(val)):
+                    typing.append(val[i])
+            else:
+                for i in range(len(val)):
+                    typing.append(val[i])
+        return typing
 
     def enforce_gecko_prefs(self, prefs):
         """
@@ -810,6 +878,8 @@ class Marionette(object):
         :param desired_capabilities: An optional dict of desired
             capabilities.  This is currently ignored.
         :param timeout: Timeout in seconds for the server to be ready.
+        :param session_id: unique identifier for the session. If no session id is
+            passed in then one will be generated by the marionette server.
 
         :returns: A dict of the capabilities offered."""
         self.wait_for_port(timeout=timeout)
@@ -888,7 +958,7 @@ class Marionette(object):
         return self.window
 
     @property
-    def chrome_window_handle(self):
+    def current_chrome_window_handle(self):
         """Get the current chrome window's handle. Corresponds to
         a chrome window that may itself contain tabs identified by
         window_handles.
@@ -901,7 +971,7 @@ class Marionette(object):
         :rtype: string
 
         """
-        self.chrome_window = self._send_message("getChromeWindowHandle", "value")
+        self.chrome_window = self._send_message("getCurrentChromeWindowHandle", "value")
         return self.chrome_window
 
 
@@ -970,7 +1040,6 @@ class Marionette(object):
         '''
         response = self._send_message('getPageSource', 'value')
         return response
-
     def close(self):
         """Close the current window, ending the session if it's the last
         window currently open.
@@ -980,6 +1049,17 @@ class Marionette(object):
         """
 
         response = self._send_message("close", "ok")
+        return response
+
+    def close_chrome_window(self):
+        """Close the currently selected chrome window, ending the session
+        if it's the last window open.
+
+        On B2G this method is a noop and will return immediately.
+
+        """
+
+        response = self._send_message("closeChromeWindow", "ok")
         return response
 
     def set_context(self, context):
@@ -1018,6 +1098,18 @@ class Marionette(object):
             yield
         finally:
             self.set_context(scope)
+
+    def switch_to_alert(self):
+        '''
+        Returns an Alert object for interacting with a currently displayed alert.
+
+        ::
+
+            alert = self.marionette.switch_to_alert()
+            text = alert.text
+            alert.accept()
+        '''
+        return Alert(self)
 
     def switch_to_window(self, window_id):
         '''
@@ -1116,6 +1208,19 @@ class Marionette(object):
         return response
 
     def timeouts(self, timeout_type, ms):
+        """An interface for managing timeout behaviour of a Marionette instance.
+
+        Setting timeouts specifies the type and amount of time the Marionette instance should wait during requests.
+
+        There are three types of timeouts that can be set: implicit, script and page load.
+
+        * An implicit  timeout specifies the amount of time a Marionette instance should wait when searching for elements. Here, marionette polls a page until an element is found or the timeout expires, whichever occurs first. When searching for multiple elements, the driver should poll the page until at least one element is found or the timeout expires, at which point it should return an empty list.
+        * A script timeout specifies the amount of time the Marionette instance should wait after calling executeAsyncScript for the callback to have executed before returning a timeout response.
+        * A page load timeout specifies the amount of time the Marionette instance should wait for a page load operation to complete. If this limit is exceeded, the Marionette instance will return a "timeout" response status.
+
+        :param timeout_type: A string value specifying the timeout type. This must be one of three types: 'implicit', 'script' or 'page load'
+        :param ms: A number value specifying the timeout length in milliseconds (ms)
+        """
         assert(timeout_type == self.TIMEOUT_SEARCH or timeout_type == self.TIMEOUT_SCRIPT or timeout_type == self.TIMEOUT_PAGE)
         response = self._send_message('timeouts', 'ok', type=timeout_type, ms=ms)
         return response
@@ -1274,7 +1379,7 @@ class Marionette(object):
                                       filename=os.path.basename(frame[0]))
         return self.unwrapValue(response)
 
-    def execute_async_script(self, script, script_args=None, new_sandbox=True, special_powers=False, script_timeout=None):
+    def execute_async_script(self, script, script_args=None, new_sandbox=True, special_powers=False, script_timeout=None, debug_script=False):
         '''
         Executes an asynchronous JavaScript script, and returns the result (or None if the script does return a value).
 
@@ -1292,6 +1397,8 @@ class Marionette(object):
         :param new_sandbox: If False, preserve global variables from the last
          execute_*script call. This is True by default, in which case no
          globals are preserved.
+        :param debug_script: Capture javascript exceptions when in
+         CONTEXT_CHROME context.
 
         Usage example:
 
@@ -1319,7 +1426,8 @@ class Marionette(object):
                                       specialPowers=special_powers,
                                       scriptTimeout=script_timeout,
                                       line=int(frame[1]),
-                                      filename=os.path.basename(frame[0]))
+                                      filename=os.path.basename(frame[0]),
+                                      debug_script=debug_script)
         return self.unwrapValue(response)
 
     def find_element(self, method, target, id=None):
@@ -1378,7 +1486,7 @@ class Marionette(object):
         assert(isinstance(response, list))
         elements = []
         for x in response:
-            elements.append(HTMLElement(self, x))
+            elements.append(HTMLElement(self, x['ELEMENT']))
         return elements
 
     def get_active_element(self):
@@ -1522,7 +1630,8 @@ class Marionette(object):
     def application_cache(self):
         return ApplicationCache(self)
 
-    def screenshot(self, element=None, highlights=None, format="base64"):
+    def screenshot(self, element=None, highlights=None, format="base64",
+                   full=True):
         """Takes a screenshot of a web element or the current frame.
 
         The screen capture is returned as a lossless PNG image encoded
@@ -1541,6 +1650,9 @@ class Marionette(object):
             as a base64-string. If "binary", the data is decoded and
             returned as raw binary.
 
+        :param full: If True (the default), the capture area will be the
+            complete frame. Else only the viewport is captured. Only applies
+            when `element` is None.
         """
 
         if element:
@@ -1549,7 +1661,8 @@ class Marionette(object):
         if highlights:
             lights = [highlight.id for highlight in highlights]
         screenshot_data = self._send_message("takeScreenshot", "value",
-                                  id=element, highlights=lights)
+                                             id=element, highlights=lights,
+                                             full=full)
         if format == 'base64':
             return screenshot_data
         elif format == 'binary':

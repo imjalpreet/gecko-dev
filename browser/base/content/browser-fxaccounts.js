@@ -2,21 +2,19 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-XPCOMUtils.defineLazyGetter(this, "FxAccountsCommon", function () {
-  return Cu.import("resource://gre/modules/FxAccountsCommon.js", {});
-});
-
-XPCOMUtils.defineLazyModuleGetter(this, "fxaMigrator",
-  "resource://services-sync/FxaMigrator.jsm");
-
-const PREF_SYNC_START_DOORHANGER = "services.sync.ui.showSyncStartDoorhanger";
-const DOORHANGER_ACTIVATE_DELAY_MS = 5000;
-const SYNC_MIGRATION_NOTIFICATION_TITLE = "fxa-migration";
-
 let gFxAccounts = {
+
+  PREF_SYNC_START_DOORHANGER: "services.sync.ui.showSyncStartDoorhanger",
+  DOORHANGER_ACTIVATE_DELAY_MS: 5000,
+  SYNC_MIGRATION_NOTIFICATION_TITLE: "fxa-migration",
 
   _initialized: false,
   _inCustomizationMode: false,
+  // _expectingNotifyClose is a hack that helps us determine if the
+  // migration notification was closed due to being "dismissed" vs closed
+  // due to one of the migration buttons being clicked.  It's ugly and somewhat
+  // fragile, so bug 1119020 exists to help us do this better.
+  _expectingNotifyClose: false,
 
   get weave() {
     delete this.weave;
@@ -34,8 +32,9 @@ let gFxAccounts = {
       "weave:service:login:error",
       "weave:service:setup-complete",
       "fxa-migration:state-changed",
-      FxAccountsCommon.ONVERIFIED_NOTIFICATION,
-      FxAccountsCommon.ONLOGOUT_NOTIFICATION
+      this.FxAccountsCommon.ONVERIFIED_NOTIFICATION,
+      this.FxAccountsCommon.ONLOGOUT_NOTIFICATION,
+      "weave:notification:removed",
     ];
   },
 
@@ -108,14 +107,24 @@ let gFxAccounts = {
 
   observe: function (subject, topic, data) {
     switch (topic) {
-      case FxAccountsCommon.ONVERIFIED_NOTIFICATION:
-        Services.prefs.setBoolPref(PREF_SYNC_START_DOORHANGER, true);
+      case this.FxAccountsCommon.ONVERIFIED_NOTIFICATION:
+        Services.prefs.setBoolPref(this.PREF_SYNC_START_DOORHANGER, true);
         break;
       case "weave:service:sync:start":
         this.onSyncStart();
         break;
       case "fxa-migration:state-changed":
         this.onMigrationStateChanged(data, subject);
+        break;
+      case "weave:notification:removed":
+        // this exists just so we can tell the difference between "box was
+        // closed due to button press" vs "was closed due to click on [x]"
+        let notif = subject.wrappedJSObject.object;
+        if (notif.title == this.SYNC_MIGRATION_NOTIFICATION_TITLE &&
+            !this._expectingNotifyClose) {
+          // it's an [x] on our notification, so record telemetry.
+          this.fxaMigrator.recordTelemetry(this.fxaMigrator.TELEMETRY_DECLINED);
+        }
         break;
       default:
         this.updateUI();
@@ -131,11 +140,11 @@ let gFxAccounts = {
     let showDoorhanger = false;
 
     try {
-      showDoorhanger = Services.prefs.getBoolPref(PREF_SYNC_START_DOORHANGER);
+      showDoorhanger = Services.prefs.getBoolPref(this.PREF_SYNC_START_DOORHANGER);
     } catch (e) { /* The pref might not exist. */ }
 
     if (showDoorhanger) {
-      Services.prefs.clearUserPref(PREF_SYNC_START_DOORHANGER);
+      Services.prefs.clearUserPref(this.PREF_SYNC_START_DOORHANGER);
       this.showSyncStartedDoorhanger();
     }
   },
@@ -155,7 +164,7 @@ let gFxAccounts = {
       // a short delay. Without this delay the doorhanger would not show up
       // or with a too small delay show up while we're still animating the
       // window.
-      setTimeout(() => this.onSyncStart(), DOORHANGER_ACTIVATE_DELAY_MS);
+      setTimeout(() => this.onSyncStart(), this.DOORHANGER_ACTIVATE_DELAY_MS);
     } else {
       this._inCustomizationMode = event.type == "customizationstarting";
       this.updateAppMenuItem();
@@ -251,12 +260,12 @@ let gFxAccounts = {
     let status = null;
     let label = null;
     switch (this._migrationInfo.state) {
-      case fxaMigrator.STATE_USER_FXA:
+      case this.fxaMigrator.STATE_USER_FXA:
         status = "migrate-signup";
         label = this.strings.formatStringFromName("needUserShort",
           [this.button.getAttribute("fxabrandname")], 1);
         break;
-      case fxaMigrator.STATE_USER_FXA_VERIFIED:
+      case this.fxaMigrator.STATE_USER_FXA_VERIFIED:
         status = "migrate-verify";
         label = this.strings.formatStringFromName("needVerifiedUserShort",
                                                   [this._migrationInfo.email],
@@ -270,32 +279,46 @@ let gFxAccounts = {
 
   updateMigrationNotification: Task.async(function* () {
     if (!this._migrationInfo) {
-      Weave.Notifications.removeAll(SYNC_MIGRATION_NOTIFICATION_TITLE);
-      return;
-    }
-    if (gBrowser.currentURI.spec.split("?")[0] == "about:accounts") {
-      // If the current tab is about:accounts, assume the user just completed a
-      // migration step and don't bother them with a redundant notification.
+      this._expectingNotifyClose = true;
+      Weave.Notifications.removeAll(this.SYNC_MIGRATION_NOTIFICATION_TITLE);
+      // because this is called even when there is no such notification, we
+      // set _expectingNotifyClose back to false as we may yet create a new
+      // notification (but in general, once we've created a migration
+      // notification once in a session, we don't create one again)
+      this._expectingNotifyClose = false;
       return;
     }
     let note = null;
     switch (this._migrationInfo.state) {
-      case fxaMigrator.STATE_USER_FXA: {
-        let msg = this.strings.GetStringFromName("needUserLong");
-        let upgradeLabel =
-          this.strings.GetStringFromName("upgradeToFxA.label");
-        let upgradeAccessKey =
-          this.strings.GetStringFromName("upgradeToFxA.accessKey");
+      case this.fxaMigrator.STATE_USER_FXA: {
+        // There are 2 cases here - no email address means it is an offer on
+        // the first device (so the user is prompted to create an account).
+        // If there is an email address it is the "join the party" flow, so the
+        // user is prompted to sign in with the address they previously used.
+        let msg, upgradeLabel, upgradeAccessKey, learnMoreLink;
+        if (this._migrationInfo.email) {
+          msg = this.strings.formatStringFromName("signInAfterUpgradeOnOtherDevice.description",
+                                                  [this._migrationInfo.email],
+                                                  1);
+          upgradeLabel = this.strings.GetStringFromName("signInAfterUpgradeOnOtherDevice.label");
+          upgradeAccessKey = this.strings.GetStringFromName("signInAfterUpgradeOnOtherDevice.accessKey");
+        } else {
+          msg = this.strings.GetStringFromName("needUserLong");
+          upgradeLabel = this.strings.GetStringFromName("upgradeToFxA.label");
+          upgradeAccessKey = this.strings.GetStringFromName("upgradeToFxA.accessKey");
+          learnMoreLink = this.fxaMigrator.learnMoreLink;
+        }
         note = new Weave.Notification(
           undefined, msg, undefined, Weave.Notifications.PRIORITY_WARNING, [
             new Weave.NotificationButton(upgradeLabel, upgradeAccessKey, () => {
-              fxaMigrator.createFxAccount(window);
+              this._expectingNotifyClose = true;
+              this.fxaMigrator.createFxAccount(window);
             }),
-          ]
+          ], learnMoreLink
         );
         break;
       }
-      case fxaMigrator.STATE_USER_FXA_VERIFIED: {
+      case this.fxaMigrator.STATE_USER_FXA_VERIFIED: {
         let msg =
           this.strings.formatStringFromName("needVerifiedUserLong",
                                             [this._migrationInfo.email], 1);
@@ -306,14 +329,15 @@ let gFxAccounts = {
         note = new Weave.Notification(
           undefined, msg, undefined, Weave.Notifications.PRIORITY_INFO, [
             new Weave.NotificationButton(resendLabel, resendAccessKey, () => {
-              fxaMigrator.resendVerificationMail();
+              this._expectingNotifyClose = true;
+              this.fxaMigrator.resendVerificationMail();
             }),
           ]
         );
         break;
       }
     }
-    note.title = SYNC_MIGRATION_NOTIFICATION_TITLE;
+    note.title = this.SYNC_MIGRATION_NOTIFICATION_TITLE;
     Weave.Notifications.replaceTitle(note);
   }),
 
@@ -328,10 +352,10 @@ let gFxAccounts = {
       this.openSignInAgainPage("menupanel");
       break;
     case "migrate-signup":
-      fxaMigrator.createFxAccount(window);
-      break;
     case "migrate-verify":
-      fxaMigrator.resendVerificationMail();
+      // The migration flow calls for the menu item to open sync prefs rather
+      // than requesting migration start immediately.
+      this.openPreferences();
       break;
     default:
       this.openAccountsPage(null, { entryPoint: "menupanel" });
@@ -349,8 +373,8 @@ let gFxAccounts = {
     // An entryPoint param is used for server-side metrics.  If the current tab
     // is UITour, assume that it initiated the call to this method and override
     // the entryPoint accordingly.
-    if (UITour.originTabs.get(window) &&
-        UITour.originTabs.get(window).has(gBrowser.selectedTab)) {
+    if (UITour.tourBrowsersByWindow.get(window) &&
+        UITour.tourBrowsersByWindow.get(window).has(gBrowser.selectedBrowser)) {
       urlParams.entryPoint = "uitour";
     }
     let params = new URLSearchParams();
@@ -372,3 +396,10 @@ let gFxAccounts = {
     this.openAccountsPage("reauth", { entryPoint: entryPoint });
   },
 };
+
+XPCOMUtils.defineLazyGetter(gFxAccounts, "FxAccountsCommon", function () {
+  return Cu.import("resource://gre/modules/FxAccountsCommon.js", {});
+});
+
+XPCOMUtils.defineLazyModuleGetter(gFxAccounts, "fxaMigrator",
+  "resource://services-sync/FxaMigrator.jsm");

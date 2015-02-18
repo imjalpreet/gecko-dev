@@ -120,6 +120,7 @@ class CPOWProxyHandler : public BaseProxyHandler
     virtual void objectMoved(JSObject *proxy, const JSObject *old) const MOZ_OVERRIDE;
     virtual bool isCallable(JSObject *obj) const MOZ_OVERRIDE;
     virtual bool isConstructor(JSObject *obj) const MOZ_OVERRIDE;
+    virtual bool getPrototypeOf(JSContext *cx, HandleObject proxy, MutableHandleObject protop) const MOZ_OVERRIDE;
 
     static const char family;
     static const CPOWProxyHandler singleton;
@@ -679,6 +680,32 @@ WrapperOwner::className(JSContext *cx, HandleObject proxy)
 }
 
 bool
+CPOWProxyHandler::getPrototypeOf(JSContext *cx, HandleObject proxy, MutableHandleObject objp) const
+{
+    FORWARD(getPrototypeOf, (cx, proxy, objp));
+}
+
+bool
+WrapperOwner::getPrototypeOf(JSContext *cx, HandleObject proxy, MutableHandleObject objp)
+{
+    ObjectId objId = idOf(proxy);
+
+    ObjectOrNullVariant val;
+    ReturnStatus status;
+    if (!SendGetPrototypeOf(objId, &status, &val))
+        return ipcfail(cx);
+
+    LOG_STACK();
+
+    if (!ok(cx, status))
+        return false;
+
+    objp.set(fromObjectOrNullVariant(cx, val));
+
+    return true;
+}
+
+bool
 CPOWProxyHandler::regexp_toShared(JSContext *cx, HandleObject proxy, RegExpGuard *g) const
 {
     FORWARD(regexp_toShared, (cx, proxy, g));
@@ -877,6 +904,10 @@ void
 WrapperOwner::ActorDestroy(ActorDestroyReason why)
 {
     inactive_ = true;
+
+    objects_.clear();
+    unwaivedObjectIds_.clear();
+    waivedObjectIds_.clear();
 }
 
 bool
@@ -932,7 +963,7 @@ WrapperOwner::toObjectVariant(JSContext *cx, JSObject *objArg, ObjectVariant *ob
     // Whenever operating on an object that comes from the table, we wrap it
     // in findObjectById.
     unsigned wrapperFlags = 0;
-    obj = js::UncheckedUnwrap(obj, false, &wrapperFlags);
+    obj = js::UncheckedUnwrap(obj, true, &wrapperFlags);
     if (obj && IsCPOW(obj) && OwnerOf(obj) == this) {
         *objVarp = LocalObject(idOf(obj).serialize());
         return true;
@@ -982,11 +1013,15 @@ WrapperOwner::fromRemoteObjectVariant(JSContext *cx, RemoteObject objVar)
         RootedObject junkScope(cx, xpc::PrivilegedJunkScope());
         JSAutoCompartment ac(cx, junkScope);
         RootedValue v(cx, UndefinedValue());
+        // We need to setLazyProto for the getPrototypeOf hook.
+        ProxyOptions options;
+        options.setLazyProto(true);
         obj = NewProxyObject(cx,
                              &CPOWProxyHandler::singleton,
                              v,
                              nullptr,
-                             junkScope);
+                             junkScope,
+                             options);
         if (!obj)
             return nullptr;
 

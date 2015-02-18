@@ -542,6 +542,12 @@ static nsExtraMimeTypeEntry extraMimeEntries [] =
   { AUDIO_OGG, "opus", "Opus Audio" },
 #ifdef MOZ_WIDGET_GONK
   { AUDIO_AMR, "amr", "Adaptive Multi-Rate Audio" },
+  { VIDEO_AVI, "avi", "Audio Video Interleave" },
+  { VIDEO_AVI, "divx", "Audio Video Interleave" },
+  { VIDEO_MPEG_TS, "ts", "MPEG Transport Stream" },
+  { VIDEO_MPEG_TS, "m2ts", "MPEG-2 Transport Stream" },
+  { VIDEO_MATROSKA, "mkv", "MATROSKA VIDEO" },
+  { AUDIO_MATROSKA, "mka", "MATROSKA AUDIO" },
 #endif
   { VIDEO_WEBM, "webm", "Web Media Video" },
   { AUDIO_WEBM, "webm", "Web Media Audio" },
@@ -2231,24 +2237,16 @@ void nsExternalAppHandler::RequestSaveDestination(const nsAFlatString &aDefaultF
   // picker is up would cause Cancel() to be called, and the dialog would be
   // released, which would release this object too, which would crash.
   // See Bug 249143
-  nsIFile* fileToUse;
   nsRefPtr<nsExternalAppHandler> kungFuDeathGrip(this);
   nsCOMPtr<nsIHelperAppLauncherDialog> dlg(mDialog);
-  rv = mDialog->PromptForSaveToFile(this,
-                                    GetDialogParent(),
-                                    aDefaultFile.get(),
-                                    aFileExtension.get(),
-                                    mForceSave, &fileToUse);
 
-  if (rv == NS_ERROR_NOT_AVAILABLE) {
-    // we need to use the async version -> nsIHelperAppLauncherDialog.promptForSaveToFileAsync.
-    rv = mDialog->PromptForSaveToFileAsync(this, 
-                                           GetDialogParent(),
-                                           aDefaultFile.get(),
-                                           aFileExtension.get(),
-                                           mForceSave);
-  } else {
-    SaveDestinationAvailable(rv == NS_OK ? fileToUse : nullptr);
+  rv = mDialog->PromptForSaveToFileAsync(this,
+                                         GetDialogParent(),
+                                         aDefaultFile.get(),
+                                         aFileExtension.get(),
+                                         mForceSave);
+  if (NS_FAILED(rv)) {
+    Cancel(NS_BINDING_ABORTED);
   }
 }
 

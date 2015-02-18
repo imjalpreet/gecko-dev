@@ -31,23 +31,20 @@
 #include "builtin/TypedObjectConstants.h"
 #include "gc/Barrier.h"
 #include "gc/Marking.h"
+#include "js/Conversions.h"
 #include "vm/ArrayBufferObject.h"
 #include "vm/GlobalObject.h"
 #include "vm/Interpreter.h"
-#include "vm/NumericConversions.h"
 #include "vm/TypedArrayCommon.h"
 #include "vm/WrapperObject.h"
 
 #include "jsatominlines.h"
-#include "jsinferinlines.h"
-#include "jsobjinlines.h"
 
 #include "vm/NativeObject-inl.h"
 #include "vm/Shape-inl.h"
 
 using namespace js;
 using namespace js::gc;
-using namespace js::types;
 
 using mozilla::IsNaN;
 using mozilla::NegativeInfinity;
@@ -55,6 +52,8 @@ using mozilla::PodCopy;
 using mozilla::PositiveInfinity;
 using JS::CanonicalizeNaN;
 using JS::GenericNaN;
+using JS::ToInt32;
+using JS::ToUint32;
 
 /*
  * TypedArrayObject
@@ -218,7 +217,7 @@ class TypedArrayObjectTemplate : public TypedArrayObject
             return nullptr;
 
         const Class *clasp = TypedArrayObject::protoClassForType(ArrayTypeID());
-        return global->createBlankPrototypeInheriting(cx, clasp, *typedArrayProto);
+        return global->createBlankPrototypeInheriting(cx, clasp, typedArrayProto);
     }
 
     static JSObject *
@@ -242,10 +241,10 @@ class TypedArrayObjectTemplate : public TypedArrayObject
     finishClassInit(JSContext *cx, HandleObject ctor, HandleObject proto)
     {
         RootedValue bytesValue(cx, Int32Value(BYTES_PER_ELEMENT));
-        if (!JSObject::defineProperty(cx, ctor, cx->names().BYTES_PER_ELEMENT, bytesValue,
-                                      nullptr, nullptr, JSPROP_PERMANENT | JSPROP_READONLY) ||
-            !JSObject::defineProperty(cx, proto, cx->names().BYTES_PER_ELEMENT, bytesValue,
-                                      nullptr, nullptr, JSPROP_PERMANENT | JSPROP_READONLY))
+        if (!DefineProperty(cx, ctor, cx->names().BYTES_PER_ELEMENT, bytesValue,
+                            nullptr, nullptr, JSPROP_PERMANENT | JSPROP_READONLY) ||
+            !DefineProperty(cx, proto, cx->names().BYTES_PER_ELEMENT, bytesValue,
+                            nullptr, nullptr, JSPROP_PERMANENT | JSPROP_READONLY))
         {
             return false;
         }
@@ -257,7 +256,6 @@ class TypedArrayObjectTemplate : public TypedArrayObject
             return false;
 
         cx->global()->setCreateArrayFromBuffer<NativeType>(fun);
-
         return true;
     }
 
@@ -304,10 +302,11 @@ class TypedArrayObjectTemplate : public TypedArrayObject
         if (!obj)
             return nullptr;
 
-        types::TypeObject *type = cx->getNewType(obj->getClass(), TaggedProto(proto.get()));
-        if (!type)
+        ObjectGroup *group = ObjectGroup::defaultNewGroup(cx, obj->getClass(),
+                                                          TaggedProto(proto.get()));
+        if (!group)
             return nullptr;
-        obj->setType(type);
+        obj->setGroup(group);
 
         return &obj->as<TypedArrayObject>();
     }
@@ -316,7 +315,7 @@ class TypedArrayObjectTemplate : public TypedArrayObject
     makeTypedInstance(JSContext *cx, uint32_t len, gc::AllocKind allocKind)
     {
         const Class *clasp = instanceClass();
-        if (len * sizeof(NativeType) >= TypedArrayObject::SINGLETON_TYPE_BYTE_LENGTH) {
+        if (len * sizeof(NativeType) >= TypedArrayObject::SINGLETON_BYTE_LENGTH) {
             JSObject *obj = NewBuiltinClassInstance(cx, clasp, allocKind, SingletonObject);
             if (!obj)
                 return nullptr;
@@ -325,16 +324,17 @@ class TypedArrayObjectTemplate : public TypedArrayObject
 
         jsbytecode *pc;
         RootedScript script(cx, cx->currentScript(&pc));
-        NewObjectKind newKind = script
-                                ? UseNewTypeForInitializer(script, pc, clasp)
-                                : GenericObject;
+        NewObjectKind newKind = GenericObject;
+        if (script && ObjectGroup::useSingletonForAllocationSite(script, pc, clasp))
+            newKind = SingletonObject;
         RootedObject obj(cx, NewBuiltinClassInstance(cx, clasp, allocKind, newKind));
         if (!obj)
             return nullptr;
 
-        if (script) {
-            if (!types::SetInitializerObjectType(cx, script, pc, obj, newKind))
-                return nullptr;
+        if (script && !ObjectGroup::setAllocationSiteObjectGroup(cx, script, pc, obj,
+                                                                 newKind == SingletonObject))
+        {
+            return nullptr;
         }
 
         return &obj->as<TypedArrayObject>();
@@ -693,6 +693,26 @@ TypedArrayConstructor(JSContext *cx, unsigned argc, Value *vp)
     return false;
 }
 
+static bool
+FinishTypedArrayInit(JSContext *cx, HandleObject ctor, HandleObject proto)
+{
+    // Define `values` and `@@iterator` manually, because they are supposed to be the same object.
+    RootedId name(cx, NameToId(cx->names().values));
+    RootedFunction fun(cx, GetSelfHostedFunction(cx, "TypedArrayValues", name, 0));
+    if (!fun)
+        return false;
+
+    RootedValue funValue(cx, ObjectValue(*fun));
+    if (!DefineProperty(cx, proto, cx->names().values, funValue, nullptr, nullptr, 0))
+        return false;
+
+    RootedId iteratorId(cx, SYMBOL_TO_JSID(cx->wellKnownSymbols().iterator));
+    if (!DefineProperty(cx, proto, iteratorId, funValue, nullptr, nullptr, 0))
+        return false;
+
+    return true;
+}
+
 /*
  * These next 3 functions are brought to you by the buggy GCC we use to build
  * B2G ICS. Older GCC versions have a bug in which they fail to compile
@@ -777,20 +797,36 @@ TypedArrayObject::subarray(JSContext *cx, unsigned argc, Value *vp)
 
 /* static */ const JSFunctionSpec
 TypedArrayObject::protoFunctions[] = {
-    JS_SELF_HOSTED_SYM_FN(iterator, "ArrayValues", 0, 0),                          \
     JS_FN("subarray", TypedArrayObject::subarray, 2, 0),
     JS_FN("set", TypedArrayObject::set, 2, 0),
     JS_FN("copyWithin", TypedArrayObject::copyWithin, 2, 0),
+    JS_SELF_HOSTED_FN("every", "TypedArrayEvery", 2, 0),
+    JS_SELF_HOSTED_FN("fill", "TypedArrayFill", 3, 0),
     JS_SELF_HOSTED_FN("find", "TypedArrayFind", 2, 0),
     JS_SELF_HOSTED_FN("findIndex", "TypedArrayFindIndex", 2, 0),
+    JS_SELF_HOSTED_FN("forEach", "TypedArrayForEach", 2, 0),
     JS_SELF_HOSTED_FN("indexOf", "TypedArrayIndexOf", 2, 0),
+    JS_SELF_HOSTED_FN("join", "TypedArrayJoin", 1, 0),
     JS_SELF_HOSTED_FN("lastIndexOf", "TypedArrayLastIndexOf", 2, 0),
+    JS_SELF_HOSTED_FN("reduce", "TypedArrayReduce", 1, 0),
+    JS_SELF_HOSTED_FN("reduceRight", "TypedArrayReduceRight", 1, 0),
+    JS_SELF_HOSTED_FN("reverse", "TypedArrayReverse", 0, 0),
+    JS_SELF_HOSTED_FN("some", "TypedArraySome", 2, 0),
+    JS_SELF_HOSTED_FN("entries", "TypedArrayEntries", 0, 0),
+    JS_SELF_HOSTED_FN("keys", "TypedArrayKeys", 0, 0),
+    // Both of these are actually defined to the same object in FinishTypedArrayInit.
+    JS_SELF_HOSTED_FN("values", "TypedArrayValues", 0, JSPROP_DEFINE_LATE),
+    JS_SELF_HOSTED_SYM_FN(iterator, "TypedArrayValues", 0, JSPROP_DEFINE_LATE),
+#ifdef NIGHTLY_BUILD
+    JS_SELF_HOSTED_FN("includes", "TypedArrayIncludes", 2, 0),
+#endif
     JS_FS_END
 };
 
 /* static */ const JSFunctionSpec
 TypedArrayObject::staticFunctions[] = {
-    // Coming soon...
+    JS_SELF_HOSTED_FN("from", "TypedArrayStaticFrom", 3, 0),
+    JS_SELF_HOSTED_FN("of", "TypedArrayStaticOf", 0, 0),
     JS_FS_END
 };
 
@@ -822,7 +858,7 @@ TypedArrayObject::sharedTypedArrayPrototypeClass = {
         TypedArrayObject::staticFunctions,
         TypedArrayObject::protoFunctions,
         TypedArrayObject::protoAccessors,
-        nullptr,
+        FinishTypedArrayInit,
         ClassSpec::DontDefineConstructor
     }
 };
@@ -931,13 +967,13 @@ TypedArrayObjectTemplate<double>::getIndexValue(JSObject *tarray, uint32_t index
 static NewObjectKind
 DataViewNewObjectKind(JSContext *cx, uint32_t byteLength, JSObject *proto)
 {
-    if (!proto && byteLength >= TypedArrayObject::SINGLETON_TYPE_BYTE_LENGTH)
+    if (!proto && byteLength >= TypedArrayObject::SINGLETON_BYTE_LENGTH)
         return SingletonObject;
     jsbytecode *pc;
     JSScript *script = cx->currentScript(&pc);
-    if (!script)
-        return GenericObject;
-    return types::UseNewTypeForInitializer(script, pc, &DataViewObject::class_);
+    if (script && ObjectGroup::useSingletonForAllocationSite(script, pc, &DataViewObject::class_))
+        return SingletonObject;
+    return GenericObject;
 }
 
 inline DataViewObject *
@@ -963,18 +999,19 @@ DataViewObject::create(JSContext *cx, uint32_t byteOffset, uint32_t byteLength,
         return nullptr;
 
     if (proto) {
-        types::TypeObject *type = cx->getNewType(&class_, TaggedProto(proto));
-        if (!type)
+        ObjectGroup *group = ObjectGroup::defaultNewGroup(cx, &class_, TaggedProto(proto));
+        if (!group)
             return nullptr;
-        obj->setType(type);
-    } else if (byteLength >= TypedArrayObject::SINGLETON_TYPE_BYTE_LENGTH) {
-        MOZ_ASSERT(obj->hasSingletonType());
+        obj->setGroup(group);
+    } else if (byteLength >= TypedArrayObject::SINGLETON_BYTE_LENGTH) {
+        MOZ_ASSERT(obj->isSingleton());
     } else {
         jsbytecode *pc;
         RootedScript script(cx, cx->currentScript(&pc));
-        if (script) {
-            if (!types::SetInitializerObjectType(cx, script, pc, obj, newKind))
-                return nullptr;
+        if (script && !ObjectGroup::setAllocationSiteObjectGroup(cx, script, pc, obj,
+                                                                 newKind == SingletonObject))
+        {
+            return nullptr;
         }
     }
 
@@ -1925,7 +1962,7 @@ DataViewObject::defineGetter(JSContext *cx, PropertyName *name, HandleNativeObje
     if (!getter)
         return false;
 
-    return DefineNativeProperty(cx, proto, id, UndefinedHandleValue,
+    return NativeDefineProperty(cx, proto, id, UndefinedHandleValue,
                                 JS_DATA_TO_FUNC_PTR(PropertyOp, getter), nullptr, attrs);
 }
 

@@ -18,11 +18,13 @@ public:
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(MP4DemuxerBinding);
 
   nsRefPtr<MockMediaResource> resource;
+  Monitor mMonitor;
   nsAutoPtr<MP4Demuxer> demuxer;
 
   explicit MP4DemuxerBinding(const char* aFileName = "dash_dashinit.mp4")
     : resource(new MockMediaResource(aFileName))
-    , demuxer(new MP4Demuxer(new MP4Stream(resource)))
+    , mMonitor("TestMP4Demuxer monitor")
+    , demuxer(new MP4Demuxer(new MP4Stream(resource), &mMonitor))
   {
     EXPECT_EQ(NS_OK, resource->Open(nullptr));
   }
@@ -36,6 +38,7 @@ private:
 TEST(MP4Demuxer, Seek)
 {
   nsRefPtr<MP4DemuxerBinding> b = new MP4DemuxerBinding();
+  MonitorAutoLock mon(b->mMonitor);
   MP4Demuxer* d = b->demuxer;
 
   EXPECT_TRUE(d->Init());
@@ -87,6 +90,7 @@ ToCryptoString(CryptoSample& aCrypto)
 TEST(MP4Demuxer, CENC)
 {
   nsRefPtr<MP4DemuxerBinding> b = new MP4DemuxerBinding("short-cenc.mp4");
+  MonitorAutoLock mon(b->mMonitor);
   MP4Demuxer* d = b->demuxer;
 
   EXPECT_TRUE(d->Init());
@@ -147,6 +151,7 @@ TEST(MP4Demuxer, CENC)
 TEST(MP4Demuxer, CENCFrag)
 {
   nsRefPtr<MP4DemuxerBinding> b = new MP4DemuxerBinding("gizmo-frag.mp4");
+  MonitorAutoLock mon(b->mMonitor);
   MP4Demuxer* d = b->demuxer;
 
   EXPECT_TRUE(d->Init());
@@ -325,4 +330,35 @@ TEST(MP4Demuxer, CENCFrag)
     EXPECT_STREQ(audio[i++], text.get());
   }
   EXPECT_EQ(ArrayLength(audio), i);
+}
+
+TEST(MP4Demuxer, GetNextKeyframe)
+{
+  nsRefPtr<MP4DemuxerBinding> b = new MP4DemuxerBinding("gizmo-frag.mp4");
+  MonitorAutoLock mon(b->mMonitor);
+  MP4Demuxer* d = b->demuxer;
+
+  EXPECT_TRUE(d->Init());
+
+  // Insert a [0,end] buffered range, to simulate Moof's being buffered
+  // via MSE.
+  auto len = b->resource->GetLength();
+  b->resource->MockAddBufferedRange(0, len);
+
+  // Rebuild the index so that it can be used to find the keyframes.
+  nsTArray<MediaByteRange> ranges;
+  EXPECT_TRUE(NS_SUCCEEDED(b->resource->GetCachedRanges(ranges)));
+  d->UpdateIndex(ranges);
+
+  // gizmp-frag has two keyframes; one at dts=cts=0, and another at
+  // dts=cts=1000000. Verify we get expected results.
+
+  MP4Sample* sample;
+  size_t i = 0;
+  const int64_t keyframe = 1000000;
+  while (!!(sample = d->DemuxVideoSample())) {
+    int64_t expected = (sample->decode_timestamp < keyframe) ? keyframe : -1;
+    EXPECT_EQ(d->GetNextKeyframeTime(), expected);
+    i++;
+  }
 }

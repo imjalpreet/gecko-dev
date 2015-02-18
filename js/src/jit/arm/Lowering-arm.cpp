@@ -125,10 +125,19 @@ LIRGeneratorARM::visitBox(MBox *box)
 void
 LIRGeneratorARM::visitUnbox(MUnbox *unbox)
 {
-    // An unbox on arm reads in a type tag (either in memory or a register) and
-    // a payload. Unlike most instructions conusming a box, we ask for the type
-    // second, so that the result can re-use the first input.
     MDefinition *inner = unbox->getOperand(0);
+
+    if (inner->type() == MIRType_ObjectOrNull) {
+        LUnboxObjectOrNull *lir = new(alloc()) LUnboxObjectOrNull(useRegisterAtStart(inner));
+        if (unbox->fallible())
+            assignSnapshot(lir, unbox->bailoutKind());
+        defineReuseInput(lir, unbox, 0);
+        return;
+    }
+
+    // An unbox on arm reads in a type tag (either in memory or a register) and
+    // a payload. Unlike most instructions consuming a box, we ask for the type
+    // second, so that the result can re-use the first input.
     MOZ_ASSERT(inner->type() == MIRType_Value);
 
     ensureDefined(inner);
@@ -387,13 +396,13 @@ LIRGeneratorARM::visitGuardShape(MGuardShape *ins)
 }
 
 void
-LIRGeneratorARM::visitGuardObjectType(MGuardObjectType *ins)
+LIRGeneratorARM::visitGuardObjectGroup(MGuardObjectGroup *ins)
 {
     MOZ_ASSERT(ins->obj()->type() == MIRType_Object);
 
     LDefinition tempObj = temp(LDefinition::OBJECT);
-    LGuardObjectType *guard = new(alloc()) LGuardObjectType(useRegister(ins->obj()), tempObj);
-    assignSnapshot(guard, Bailout_ObjectIdentityOrTypeGuard);
+    LGuardObjectGroup *guard = new(alloc()) LGuardObjectGroup(useRegister(ins->obj()), tempObj);
+    assignSnapshot(guard, ins->bailoutKind());
     add(guard, ins);
     redefine(ins, ins->obj());
 }
@@ -492,10 +501,10 @@ LIRGeneratorARM::visitAsmJSLoadHeap(MAsmJSLoadHeap *ins)
     LAllocation ptrAlloc;
 
     // For the ARM it is best to keep the 'ptr' in a register if a bounds check is needed.
-    if (ptr->isConstant() && !ins->needsBoundsCheck()) {
+    if (ptr->isConstantValue() && !ins->needsBoundsCheck()) {
         // A bounds check is only skipped for a positive index.
-        MOZ_ASSERT(ptr->toConstant()->value().toInt32() >= 0);
-        ptrAlloc = LAllocation(ptr->toConstant()->vp());
+        MOZ_ASSERT(ptr->constantValue().toInt32() >= 0);
+        ptrAlloc = LAllocation(ptr->constantVp());
     } else {
         ptrAlloc = useRegisterAtStart(ptr);
     }
@@ -510,9 +519,9 @@ LIRGeneratorARM::visitAsmJSStoreHeap(MAsmJSStoreHeap *ins)
     MOZ_ASSERT(ptr->type() == MIRType_Int32);
     LAllocation ptrAlloc;
 
-    if (ptr->isConstant() && !ins->needsBoundsCheck()) {
-        MOZ_ASSERT(ptr->toConstant()->value().toInt32() >= 0);
-        ptrAlloc = LAllocation(ptr->toConstant()->vp());
+    if (ptr->isConstantValue() && !ins->needsBoundsCheck()) {
+        MOZ_ASSERT(ptr->constantValue().toInt32() >= 0);
+        ptrAlloc = LAllocation(ptr->constantVp());
     } else {
         ptrAlloc = useRegisterAtStart(ptr);
     }
@@ -551,19 +560,13 @@ LIRGeneratorARM::visitStoreTypedArrayElementStatic(MStoreTypedArrayElementStatic
 }
 
 void
-LIRGeneratorARM::visitForkJoinGetSlice(MForkJoinGetSlice *ins)
-{
-    MOZ_CRASH("NYI");
-}
-
-void
 LIRGeneratorARM::visitSimdBinaryArith(MSimdBinaryArith *ins)
 {
     MOZ_CRASH("NYI");
 }
 
 void
-LIRGeneratorARM::visitSimdTernaryBitwise(MSimdTernaryBitwise *ins)
+LIRGeneratorARM::visitSimdSelect(MSimdSelect *ins)
 {
     MOZ_CRASH("NYI");
 }
@@ -650,7 +653,7 @@ LIRGeneratorARM::visitCompareExchangeTypedArrayElement(MCompareExchangeTypedArra
 void
 LIRGeneratorARM::visitAsmJSCompareExchangeHeap(MAsmJSCompareExchangeHeap *ins)
 {
-    MOZ_ASSERT(ins->viewType() < Scalar::Float32);
+    MOZ_ASSERT(ins->accessType() < Scalar::Float32);
 
     MDefinition *ptr = ins->ptr();
     MOZ_ASSERT(ptr->type() == MIRType_Int32);
@@ -666,7 +669,7 @@ LIRGeneratorARM::visitAsmJSCompareExchangeHeap(MAsmJSCompareExchangeHeap *ins)
 void
 LIRGeneratorARM::visitAsmJSAtomicBinopHeap(MAsmJSAtomicBinopHeap *ins)
 {
-    MOZ_ASSERT(ins->viewType() < Scalar::Float32);
+    MOZ_ASSERT(ins->accessType() < Scalar::Float32);
 
     MDefinition *ptr = ins->ptr();
     MOZ_ASSERT(ptr->type() == MIRType_Int32);

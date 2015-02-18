@@ -35,7 +35,7 @@ var ecmaGlobals =
     "Int32Array",
     "Int8Array",
     "InternalError",
-    {name: "Intl", desktop: true},
+    {name: "Intl", b2g: false, android: false},
     "Iterator",
     "JSON",
     "Map",
@@ -88,13 +88,19 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "Blob",
 // IMPORTANT: Do not change this list without review from a DOM peer!
+    { name: "BroadcastChannel", pref: "dom.broadcastChannel.enabled" },
+// IMPORTANT: Do not change this list without review from a DOM peer!
     "DedicatedWorkerGlobalScope",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     { name: "DataStore", b2g: true },
 // IMPORTANT: Do not change this list without review from a DOM peer!
     { name: "DataStoreCursor", b2g: true },
 // IMPORTANT: Do not change this list without review from a DOM peer!
+    "DOMError",
+// IMPORTANT: Do not change this list without review from a DOM peer!
     "DOMException",
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    "DOMStringList",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "Event",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -105,6 +111,26 @@ var interfaceNamesInGlobalScope =
     "FileReaderSync",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     { name: "Headers", pref: "dom.fetch.enabled" },
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    "IDBCursor",
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    "IDBDatabase",
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    "IDBFactory",
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    "IDBIndex",
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    "IDBKeyRange",
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    "IDBObjectStore",
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    "IDBOpenDBRequest",
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    "IDBRequest",
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    "IDBTransaction",
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    "IDBVersionChangeEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "ImageData",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -122,13 +148,15 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "XMLHttpRequest",
 // IMPORTANT: Do not change this list without review from a DOM peer!
+    "XMLHttpRequestEventTarget",
+// IMPORTANT: Do not change this list without review from a DOM peer!
     "XMLHttpRequestUpload",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "URL",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "URLSearchParams",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "WebSocket",
+   { name: "WebSocket", pref: "dom.workers.websocket.enabled" },
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "Worker",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -141,11 +169,11 @@ var interfaceNamesInGlobalScope =
   ];
 // IMPORTANT: Do not change the list above without review from a DOM peer!
 
-function createInterfaceMap(prefMap, permissionMap, version, userAgent) {
+function createInterfaceMap(prefMap, permissionMap, version, userAgent, isB2G) {
   var isNightly = version.endsWith("a1");
   var isRelease = !version.contains("a");
   var isDesktop = !/Mobile|Tablet/.test(userAgent);
-  var isB2G = !isDesktop && !userAgent.contains("Android");
+  var isAndroid = !!navigator.userAgent.contains("Android");
 
   var interfaceMap = {};
 
@@ -156,6 +184,7 @@ function createInterfaceMap(prefMap, permissionMap, version, userAgent) {
         interfaceMap[entry] = true;
       } else if ((entry.nightly === !isNightly) ||
                  (entry.desktop === !isDesktop) ||
+                 (entry.android === !isAndroid) ||
                  (entry.b2g === !isB2G) ||
                  (entry.release === !isRelease) ||
                  (entry.pref && !prefMap[entry.pref])  ||
@@ -173,8 +202,8 @@ function createInterfaceMap(prefMap, permissionMap, version, userAgent) {
   return interfaceMap;
 }
 
-function runTest(prefMap, permissionMap, version, userAgent) {
-  var interfaceMap = createInterfaceMap(prefMap, permissionMap, version, userAgent);
+function runTest(prefMap, permissionMap, version, userAgent, isB2G) {
+  var interfaceMap = createInterfaceMap(prefMap, permissionMap, version, userAgent, isB2G);
   for (var name of Object.getOwnPropertyNames(self)) {
     // An interface name should start with an upper case character.
     if (!/^[A-Z]/.test(name)) {
@@ -226,8 +255,10 @@ workerTestGetPrefs(prefs, function(prefMap) {
   workerTestGetPermissions(permissions, function(permissionMap) {
     workerTestGetVersion(function(version) {
       workerTestGetUserAgent(function(userAgent) {
-        runTest(prefMap, permissionMap, version, userAgent);
-        workerTestDone();
+        workerTestGetIsB2G(function(isB2G) {
+          runTest(prefMap, permissionMap, version, userAgent, isB2G);
+          workerTestDone();
+	});
       });
     });
   });
